@@ -6,30 +6,56 @@
 <style>
     body { margin:0; background:#111; overflow:hidden; }
     canvas { background:#222; display:block; margin:0 auto; }
+
     #ui {
         position:fixed;
         top:10px;
         left:10px;
         color:white;
         font-family:sans-serif;
-        background:rgba(0,0,0,0.5);
+        background:rgba(0,0,0,0.55);
         padding:10px;
-        border-radius:5px;
+        border-radius:6px;
+        border:1px solid #0af;
+        box-shadow:0 0 12px #0af;
     }
     #minimap {
         position:fixed;
         right:10px;
         bottom:10px;
-        width:150px;
-        height:150px;
+        width:170px;
+        height:170px;
         background:#000;
-        border:2px solid #555;
-        animation:borderPulse 3s infinite;
+        border:3px solid #08f;
+        border-radius:50%;
+        box-shadow:0 0 20px #08f;
     }
-    @keyframes borderPulse {
-        0% { border-color:#444; }
-        50% { border-color:#08f; }
-        100% { border-color:#444; }
+    #weapons {
+        position:fixed;
+        bottom:15px;
+        left:50%;
+        transform:translateX(-50%);
+        display:flex;
+        gap:10px;
+    }
+    .weaponSlot {
+        width:60px;
+        height:60px;
+        border:2px solid #aaa;
+        border-radius:8px;
+        background:#0008;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        color:white;
+        font-size:14px;
+        box-shadow:0 0 10px #000;
+        transition:0.15s;
+    }
+    .weaponSlot.active {
+        border-color:#0f0;
+        box-shadow:0 0 12px #0f0;
+        transform:scale(1.1);
     }
 </style>
 </head>
@@ -52,6 +78,12 @@
     </div>
 </div>
 
+<div id="weapons">
+    <div class="weaponSlot active" id="weapon1">🔪</div>
+    <div class="weaponSlot" id="weapon2">🏹</div>
+    <div class="weaponSlot" id="weapon3">🛡️</div>
+</div>
+
 <canvas id="game" width="900" height="600"></canvas>
 <canvas id="minimap"></canvas>
 
@@ -61,7 +93,7 @@
 /* =========================
         CONFIG
 ========================= */
-const SERVER_URL = "https://warfort.onrender.com"; 
+const SERVER_URL = "https://warfort.onrender.com";
 let socket = null;
 
 const canvas = document.getElementById("game");
@@ -72,8 +104,7 @@ const mctx = minimap.getContext("2d");
 
 let username = "";
 let zoom = 1;
-
-let time = 0; // día/noche
+let time = 0;
 
 /* =========================
        JUGADOR
@@ -86,17 +117,19 @@ let player = {
     speed: 3,
     hp: 100,
     stamina: 100,
-    dir: 1
+    dir: 1,
+    weapon: 1
 };
 
 let particles = [];
+let arrows = [];
 
 let otherPlayers = {};
 let map = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[] };
 let keys = {};
 
 let camera = { x:0, y:0, lerpX:0, lerpY:0, width:900, height:600 };
-const WORLD = { width:2000, height:2000 };
+const WORLD = { width:3000, height:3000 };
 
 /* =========================
         INICIAR
@@ -144,8 +177,45 @@ canvas.addEventListener("wheel", e => {
     document.getElementById("zoomValue").innerText = zoom.toFixed(2);
 });
 
+/* CAMBIO DE ARMA */
+document.addEventListener("keydown", e => {
+    if (e.key >= "1" && e.key <= "3") {
+        player.weapon = parseInt(e.key);
+        updateWeaponUI();
+    }
+});
+
+/* DISPARAR ARCO */
+canvas.addEventListener("click", e => {
+    if (player.weapon === 2) shootArrow(e);
+});
+
+function updateWeaponUI() {
+    document.querySelectorAll(".weaponSlot").forEach(s => s.classList.remove("active"));
+    document.getElementById("weapon" + player.weapon).classList.add("active");
+}
+
 /* =========================
-        ACTUALIZAR
+      ARROW SYSTEM
+========================= */
+function shootArrow(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / zoom + camera.lerpX;
+    const my = (e.clientY - rect.top) / zoom + camera.lerpY;
+
+    const ang = Math.atan2(my - player.y, mx - player.x);
+
+    arrows.push({
+        x: player.x,
+        y: player.y,
+        vx: Math.cos(ang) * 10,
+        vy: Math.sin(ang) * 10,
+        life: 90
+    });
+}
+
+/* =========================
+       UPDATE PLAYER
 ========================= */
 function updatePlayer() {
     player.dx = 0;
@@ -179,7 +249,7 @@ function updatePlayer() {
 }
 
 /* =========================
-     PARTÍCULAS
+     PARTICULAS
 ========================= */
 function spawnParticles() {
     particles.push({
@@ -202,13 +272,25 @@ function updateParticles() {
 }
 
 /* =========================
+       UPDATE ARROWS
+========================= */
+function updateArrows() {
+    arrows = arrows.filter(a => a.life > 0);
+    for (let a of arrows) {
+        a.x += a.vx;
+        a.y += a.vy;
+        a.life--;
+    }
+}
+
+/* =========================
         DIBUJO
 ========================= */
 function draw() {
     ctx.clearRect(0,0,canvas.width,canvas.height);
 
     time += 0.002;
-    let night = (Math.sin(time) + 1) / 2; // 0 = día / 1 = noche
+    let night = (Math.sin(time) + 1) / 2;
 
     camera.lerpX += (player.x - camera.lerpX - camera.width/2/zoom) * 0.1;
     camera.lerpY += (player.y - camera.lerpY - camera.height/2/zoom) * 0.1;
@@ -219,9 +301,9 @@ function draw() {
 
     drawGrid();
     drawParticles();
+    drawArrows();
     drawPlayer();
     drawOtherPlayers();
-
     drawDarkness(night);
 
     ctx.restore();
@@ -229,7 +311,7 @@ function draw() {
     drawMinimap();
 }
 
-/* CUADRÍCULA */
+/* GRID */
 function drawGrid() {
     ctx.strokeStyle = "rgba(255,255,255,0.04)";
     for (let i = 0; i < WORLD.width; i += 50) {
@@ -246,20 +328,26 @@ function drawGrid() {
     }
 }
 
-/* PARTÍCULAS */
-function drawParticles() {
-    for (let p of particles) {
-        ctx.fillStyle = `rgba(255,255,255,${p.alpha})`;
-        ctx.fillRect(p.x, p.y, p.size, p.size);
-    }
+/* ARROWS */
+function drawArrows() {
+    ctx.fillStyle = "orange";
+    arrows.forEach(a => {
+        ctx.fillRect(a.x, a.y, 8, 3);
+    });
 }
 
-/* JUGADOR */
+/* PLAYER */
 function drawPlayer() {
     ctx.fillStyle = "cyan";
     ctx.beginPath();
     ctx.arc(player.x, player.y, 10, 0, Math.PI*2);
     ctx.fill();
+
+    ctx.strokeStyle = "#fff";
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.lineTo(player.x + player.dir * 20, player.y);
+    ctx.stroke();
 
     ctx.fillStyle = "white";
     ctx.font = "14px Arial";
@@ -269,34 +357,29 @@ function drawPlayer() {
     ctx.fillRect(player.x - 15, player.y - 25, 30, 4);
     ctx.fillStyle = "lime";
     ctx.fillRect(player.x - 15, player.y - 25, player.hp * 0.3, 4);
-
-    ctx.fillStyle = "yellow";
-    ctx.fillRect(player.x - 15, player.y - 19, 30, 3);
-    ctx.fillStyle = "orange";
-    ctx.fillRect(player.x - 15, player.y - 19, player.stamina * 0.3, 3);
 }
 
-/* OTROS JUGADORES */
+/* OTHER PLAYERS */
 function drawOtherPlayers() {
     for (let id in otherPlayers) {
         const p = otherPlayers[id];
 
-        ctx.fillStyle = "yellow";
+        ctx.fillStyle = "#ff0";
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, 10, 0, Math.PI*2);
         ctx.fill();
 
-        ctx.fillStyle = "white";
+        ctx.fillStyle = "#fff";
         ctx.fillText(p.name ?? "Player", p.x - 20, p.y - 15);
     }
 }
 
-/* OSCURIDAD DÍA / NOCHE */
+/* DARKNESS */
 function drawDarkness(intensity) {
     ctx.fillStyle = `rgba(0,0,30,${intensity * 0.7})`;
     ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
 
-    let grad = ctx.createRadialGradient(player.x, player.y, 10, player.x, player.y, 200);
+    let grad = ctx.createRadialGradient(player.x, player.y, 10, player.x, player.y, 220);
     grad.addColorStop(0, "rgba(255,255,255,0)");
     grad.addColorStop(1, `rgba(0,0,0,${0.7 * intensity})`);
 
@@ -304,7 +387,7 @@ function drawDarkness(intensity) {
     ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
 }
 
-/* MINIMAPA */
+/* MINIMAP */
 function drawMinimap() {
     mctx.fillStyle = "#000";
     mctx.fillRect(0,0,minimap.width,minimap.height);
@@ -313,12 +396,16 @@ function drawMinimap() {
     let sy = minimap.height / WORLD.height;
 
     mctx.fillStyle = "cyan";
-    mctx.fillRect(player.x * sx - 2, player.y * sy - 2, 4, 4);
+    mctx.beginPath();
+    mctx.arc(player.x * sx, player.y * sy, 4, 0, Math.PI*2);
+    mctx.fill();
 
     mctx.fillStyle = "yellow";
     for (let id in otherPlayers) {
         let p = otherPlayers[id];
-        mctx.fillRect(p.x * sx - 2, p.y * sy - 2, 4, 4);
+        mctx.beginPath();
+        mctx.arc(p.x * sx, p.y * sy, 3, 0, Math.PI*2);
+        mctx.fill();
     }
 }
 
@@ -326,6 +413,7 @@ function drawMinimap() {
 function loop() {
     updatePlayer();
     updateParticles();
+    updateArrows();
     draw();
     requestAnimationFrame(loop);
 }
