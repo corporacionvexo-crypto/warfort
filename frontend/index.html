@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>WARFORT+ Naturaleza</title>
+<title>WARFORT+ Naturaleza Mejorado</title>
 <style>
   body { margin:0; background:#88c; overflow:hidden; font-family:sans-serif; }
   canvas { display:block; margin:0 auto; background:linear-gradient(#77d,#4aa); }
@@ -11,8 +11,9 @@
     color:white; font-size:14px;
   }
   #weapons { position:fixed; bottom:10px; left:50%; transform:translateX(-50%); display:flex; gap:10px; }
-  .weaponSlot { width:50px; height:50px; display:flex; align-items:center; justify-content:center; border-radius:8px; background:rgba(255,255,255,0.1); border:1px solid #fff; cursor:pointer; }
-  .weaponSlot.active { background:rgba(0,255,255,0.2); transform:scale(1.1); }
+  .weaponSlot { width:50px; height:50px; display:flex; align-items:center; justify-content:center; border-radius:8px; background:rgba(255,255,255,0.1); border:1px solid #fff; cursor:pointer; transition:0.2s; }
+  .weaponSlot.active { background:rgba(0,255,255,0.2); transform:scale(1.2); }
+  #minimap { position:fixed; top:10px; right:10px; width:150px; height:150px; background:rgba(0,0,0,0.5); border-radius:8px; }
 </style>
 </head>
 <body>
@@ -31,13 +32,17 @@
   <div class="weaponSlot" data-id="3">🛡️</div>
 </div>
 <canvas id="game" width="1000" height="660"></canvas>
+<canvas id="minimap"></canvas>
 <script>
 const canvas=document.getElementById('game');
 const ctx=canvas.getContext('2d');
+const minimap=document.getElementById('minimap');
+const miniCtx=minimap.getContext('2d');
+
 let username='', zoom=1;
 const WORLD={width:3000,height:3000};
 
-let player={x:500,y:330,hp:100,stamina:100,dir:1,weapon:1,shield:false};
+let player={x:500,y:330,hp:100,stamina:100,dir:1,weapon:1,shield:false,shieldTimer:0};
 let keys={};
 let animals=[];
 let particles=[];
@@ -52,7 +57,11 @@ const hpEl=document.getElementById('hp');
 const staminaEl=document.getElementById('stamina');
 const currentWeaponEl=document.getElementById('currentWeapon');
 
-document.addEventListener('keydown',e=>{ keys[e.key.toLowerCase()]=true; if(e.key>='1' && e.key<='3') changeWeapon(Number(e.key)); });
+document.addEventListener('keydown',e=>{ 
+  keys[e.key.toLowerCase()]=true; 
+  if(e.key>='1' && e.key<='3') changeWeapon(Number(e.key)); 
+  if(e.key===' ' && player.weapon===3) activateShield();
+});
 document.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
 canvas.addEventListener('mousedown', e=>{
   if(player.weapon===1) swordAttack();
@@ -66,18 +75,26 @@ function changeWeapon(n){
   document.querySelectorAll('.weaponSlot').forEach(el=>el.classList.toggle('active',Number(el.dataset.id)===n));
 }
 
+function activateShield(){
+  player.shield=true;
+  player.shieldTimer=180; // dura 3 segundos aprox
+}
+
 // === GAME ===
 function startGame(){
   username=document.getElementById('nameInput').value||'You';
   document.getElementById('nameInput').parentElement.style.display='none';
   document.getElementById('hud').style.display='block';
-  for(let i=0;i<15;i++){ animals.push({x:Math.random()*WORLD.width,y:Math.random()*WORLD.height,hp:50,type:Math.random()<0.5?'vaca':'lobo',dir:Math.random()*Math.PI*2}); }
+  for(let i=0;i<15;i++){ 
+    animals.push({x:Math.random()*WORLD.width,y:Math.random()*WORLD.height,hp:50,type:Math.random()<0.5?'vaca':'lobo',dir:Math.random()*Math.PI*2}); 
+  }
   requestAnimationFrame(loop);
 }
 
 function loop(){
   update();
   draw();
+  drawMinimap();
   requestAnimationFrame(loop);
 }
 
@@ -89,6 +106,10 @@ function update(){
   if(keys['a']) { player.x-=sp; player.dir=-1; }
   if(keys['d']) { player.x+=sp; player.dir=1; }
   player.stamina=Math.min(100,player.stamina+(keys['shift']? -0.5 :0.3));
+
+  // escudo
+  if(player.shield) player.shieldTimer--;
+  if(player.shieldTimer<=0) player.shield=false;
 
   // animales
   for(let a of animals){
@@ -110,7 +131,13 @@ function update(){
   }
 
   // partículas
-  for(let i=particles.length-1;i>=0;i--){ let p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.life--; if(p.life<=0) particles.splice(i,1); }
+  for(let i=particles.length-1;i>=0;i--){ 
+    let p=particles[i]; 
+    p.x+=p.vx; p.y+=p.vy; 
+    p.life--; 
+    p.alpha=p.life/20; 
+    if(p.life<=0) particles.splice(i,1); 
+  }
 
   hpEl.innerText=player.hp;
   staminaEl.innerText=Math.floor(player.stamina);
@@ -122,7 +149,7 @@ function draw(){
 
   // terreno
   ctx.fillStyle='#6c9'; ctx.fillRect(0,0,WORLD.width,WORLD.height);
-  ctx.fillStyle='#4af'; for(let i=0;i<WORLD.width;i+=100){ ctx.fillRect(i,500,100,50); } // río simple
+  ctx.fillStyle='#4af'; for(let i=0;i<WORLD.width;i+=100){ ctx.fillRect(i,500,100,50); }
 
   // ciudades
   for(let c of cities){ ctx.fillStyle='#a52'; ctx.fillRect(c.x-30,c.y-30,60,60); ctx.fillStyle='white'; ctx.fillText(c.name,c.x-20,c.y-35); }
@@ -130,10 +157,15 @@ function draw(){
   // animales
   for(let a of animals){
     ctx.fillStyle=(a.type==='lobo'?'#888':'#fff'); ctx.beginPath(); ctx.arc(a.x,a.y,12,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='rgba(0,0,0,0.3)'; ctx.stroke();
   }
 
   // jugador
   ctx.fillStyle='blue'; ctx.beginPath(); ctx.arc(player.x,player.y,15,0,Math.PI*2); ctx.fill();
+  if(player.shield){
+    ctx.strokeStyle='rgba(0,255,255,0.5)'; ctx.lineWidth=5;
+    ctx.beginPath(); ctx.arc(player.x,player.y,25,0,Math.PI*2); ctx.stroke();
+  }
 
   // flechas
   ctx.fillStyle='orange'; for(let a of arrows){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.dir); ctx.fillRect(-6,-2,12,4); ctx.restore(); }
@@ -144,10 +176,15 @@ function draw(){
   ctx.restore();
 }
 
-// ataques
 function swordAttack(){
   for(let a of animals){
-    if(Math.hypot(player.x-a.x,player.y-a.y)<40){ a.hp-=20; particles.push({x:a.x,y:a.y,vx:(Math.random()-0.5)*2,vy:(Math.random()-0.5)*2,size:3,alpha:1,life:20}); if(a.hp<=0) animals.splice(animals.indexOf(a),1); }
+    if(Math.hypot(player.x-a.x,player.y-a.y)<40){ 
+      a.hp-=20; 
+      for(let i=0;i<10;i++){
+        particles.push({x:a.x,y:a.y,vx:(Math.random()-0.5)*3,vy:(Math.random()-0.5)*3,size:3,alpha:1,life:20});
+      }
+      if(a.hp<=0) animals.splice(animals.indexOf(a),1); 
+    }
   }
 }
 
@@ -156,6 +193,24 @@ function shootArrow(e){
   const mx=(e.clientX-rect.left)/zoom + player.x - canvas.width/2/zoom;
   const my=(e.clientY-rect.top)/zoom + player.y - canvas.height/2/zoom;
   arrows.push({x:player.x,y:player.y,dir:Math.atan2(my-player.y,mx-player.x),life:100});
+}
+
+// minimapa
+function drawMinimap(){
+  miniCtx.clearRect(0,0,minimap.width,minimap.height);
+  miniCtx.fillStyle='#333'; miniCtx.fillRect(0,0,minimap.width,minimap.height);
+
+  const scaleX=minimap.width/WORLD.width;
+  const scaleY=minimap.height/WORLD.height;
+
+  miniCtx.fillStyle='green';
+  for(let a of animals){ miniCtx.fillRect(a.x*scaleX-2,a.y*scaleY-2,4,4); }
+
+  miniCtx.fillStyle='red';
+  for(let c of cities){ miniCtx.fillRect(c.x*scaleX-4,c.y*scaleY-4,8,8); }
+
+  miniCtx.fillStyle='blue';
+  miniCtx.fillRect(player.x*scaleX-3,player.y*scaleY-3,6,6);
 }
 </script>
 </body>
