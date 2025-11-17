@@ -39,19 +39,21 @@
 
 <canvas id="game" width="900" height="600"></canvas>
 
+<!-- Socket.IO -->
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
 <script>
-/* ============================
-     CONFIGURACIÓN SOCKET.IO
-   ============================ */
+/* ===============================
+        CONFIGURACIÓN SOCKET.IO
+   =============================== */
 
-const SERVER_URL = "https://warfort.onrender.com";  // TU SERVIDOR
+const SERVER_URL = "https://warfort.onrender.com"; // URL REAL DEL BACKEND
+
 let socket = null;
 
-/* ============================
-     VARIABLES DEL JUEGO
-   ============================ */
+/* ===============================
+           VARIABLES DEL JUEGO
+   =============================== */
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -74,9 +76,9 @@ let map = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[] };
 
 let keys = {};
 
-/* ============================
-        INICIAR EL JUEGO
-   ============================ */
+/* ===============================
+            INICIAR EL JUEGO
+   =============================== */
 
 function startGame() {
     const name = document.getElementById("nameInput").value.trim();
@@ -87,7 +89,10 @@ function startGame() {
     document.getElementById("stats").style.display = "block";
 
     // conectar a servidor
-    socket = io(SERVER_URL, { transports:["websocket"] });
+    socket = io(SERVER_URL, {
+        transports: ["websocket", "polling"],
+        reconnection: true
+    });
 
     socket.on("connect", () => {
         socket.emit("join", { name: username, x: player.x, y: player.y });
@@ -111,9 +116,9 @@ function startGame() {
     loop();
 }
 
-/* ============================
-          MOVIMIENTO
-   ============================ */
+/* ===============================
+             MOVIMIENTO
+   =============================== */
 
 document.addEventListener("keydown", e => keys[e.key] = true);
 document.addEventListener("keyup",   e => keys[e.key] = false);
@@ -124,12 +129,12 @@ function updatePlayer() {
     if (keys["a"]) player.x -= player.speed;
     if (keys["d"]) player.x += player.speed;
 
-    socket.emit("update", { x: player.x, y: player.y });
+    if (socket) socket.emit("update", { x: player.x, y: player.y });
 }
 
-/* ============================
-        DIBUJAR JUEGO
-   ============================ */
+/* ===============================
+         DIBUJAR JUEGO
+   =============================== */
 
 function draw() {
     ctx.clearRect(0,0,canvas.width,canvas.height);
@@ -150,9 +155,9 @@ function draw() {
     }
 }
 
-/* ============================
-            LOOP
-   ============================ */
+/* ===============================
+               LOOP
+   =============================== */
 
 function loop() {
     updatePlayer();
