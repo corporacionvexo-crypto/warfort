@@ -1,14 +1,30 @@
-// server.js — Backend para WARFORT en Railway
+// ===============================
+//  WARFORT Backend (Railway)
+// ===============================
 const express = require('express');
 const http = require('http');
 const path = require('path');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Seguridad básica
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// --------- CORS CORRECTO PARA VERCEL ---------
+const cors = require("cors");
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"],
+  credentials: false
+}));
+
+// ------------------------------------------------------------
 const server = http.createServer(app);
 const { Server } = require('socket.io');
 
-// WebSockets + CORS para Vercel
+// SOCKET.IO configurado para producción
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -16,7 +32,9 @@ const io = new Server(server, {
   }
 });
 
-// --- MAPA BASE ---
+// ===============================
+//  ESTADO GLOBAL DEL MAPA
+// ===============================
 let mapState = {
   trees: [],
   bushes: [],
@@ -26,7 +44,9 @@ let mapState = {
   forts: []
 };
 
-// --- JUGADORES ---
+// ===============================
+//  JUGADORES
+// ===============================
 const players = {};
 
 io.on("connection", (socket) => {
@@ -35,7 +55,7 @@ io.on("connection", (socket) => {
   // Enviar estado inicial
   socket.emit("init", { map: mapState, players });
 
-  // Cuando un jugador entra
+  // Jugador entra
   socket.on("join", data => {
     players[socket.id] = {
       id: socket.id,
@@ -47,26 +67,26 @@ io.on("connection", (socket) => {
     io.emit("state", { players: { [socket.id]: players[socket.id] } });
   });
 
-  // Actualización de movimiento
+  // Movimiento
   socket.on("update", data => {
     if (!players[socket.id]) return;
     players[socket.id] = { ...players[socket.id], ...data };
     socket.broadcast.emit("state", { players: { [socket.id]: players[socket.id] } });
   });
 
-  // Rueda giratoria
+  // Colocar rueda
   socket.on("placeWheel", wheel => {
     mapState.wheels.push(wheel);
     io.emit("state", { map: mapState });
   });
 
-  // Eliminar animal al matarlo
+  // Animal eliminado
   socket.on("killAnimal", data => {
     mapState.animals = mapState.animals.filter(a => a.id !== data.id);
     io.emit("state", { map: mapState });
   });
 
-  // Unirse a una fortaleza
+  // Unirse a fortaleza
   socket.on("joinFort", data => {
     if (players[socket.id]) players[socket.id].fort = data.fort;
     io.emit("state", { players: { [socket.id]: players[socket.id] } });
@@ -79,6 +99,34 @@ io.on("connection", (socket) => {
   });
 });
 
+// ===============================
+//  RUTAS NECESARIAS PARA RAILWAY
+// ===============================
+
+// Ruta principal (evita "Cannot GET /")
+app.get("/", (req, res) => {
+  res.send("🔥 WARFORT Backend activo y funcionando correctamente");
+});
+
+// Ruta para comprobar estado
+app.get("/status", (req, res) => {
+  res.json({
+    ok: true,
+    players: Object.keys(players).length,
+    mapElements: {
+      trees: mapState.trees.length,
+      bushes: mapState.bushes.length,
+      stones: mapState.stones.length,
+      animals: mapState.animals.length,
+      wheels: mapState.wheels.length,
+      forts: mapState.forts.length
+    }
+  });
+});
+
+// ===============================
+//  INICIAR SERVIDOR
+// ===============================
 server.listen(port, () => {
   console.log("🚀 WARFORT backend corriendo en Railway | Puerto:", port);
 });

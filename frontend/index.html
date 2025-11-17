@@ -1,74 +1,164 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <title>WARFORT</title>
-
-  <!-- React + Babel -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <!-- Socket.io cliente -->
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<meta charset="UTF-8">
+<title>WARFORT</title>
+<style>
+    body { margin:0; background:#111; overflow:hidden; }
+    canvas { background:#222; display:block; margin:0 auto; }
+    #ui {
+        position:fixed;
+        top:10px;
+        left:10px;
+        color:white;
+        font-family:sans-serif;
+        background:rgba(0,0,0,0.5);
+        padding:10px;
+        border-radius:5px;
+    }
+    input { padding:5px; }
+    button { padding:5px; margin-top:5px; }
+</style>
 </head>
-<body style="background:#111; color:white; font-family:sans-serif;">
 
-<div id="root"></div>
+<body>
+<div id="ui">
+    <div>
+        <label>Nombre:</label>
+        <input id="nameInput" placeholder="Tu nombre">
+        <button onclick="startGame()">Entrar</button>
+    </div>
+    <div id="stats" style="display:none;">
+        <p>Vida: <span id="hp">100</span></p>
+        <p>Madera: <span id="wood">0</span></p>
+        <p>Piedra: <span id="stone">0</span></p>
+        <p>Comida: <span id="food">0</span></p>
+        <p>Oro: <span id="gold">0</span></p>
+    </div>
+</div>
 
-<script type="text/babel">
+<canvas id="game" width="900" height="600"></canvas>
 
-function App() {
-  const [username, setUsername] = React.useState("");
-  const [socket, setSocket] = React.useState(null);
-  const [connected, setConnected] = React.useState(false);
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-  // CONECTAR AL SERVIDOR DE RAILWAY
-  const SERVER_URL = "https://TU-SERVIDOR.onrailway.app"; // ← CAMBIA ESTO
+<script>
+/* ============================
+     CONFIGURACIÓN SOCKET.IO
+   ============================ */
 
-  const connectGame = () => {
-    const s = io(SERVER_URL);
+const SERVER_URL = "https://warfort.onrender.com";  // TU SERVIDOR
+let socket = null;
 
-    s.on("connect", () => {
-      console.log("Conectado a WARFORT backend");
-      setConnected(true);
-      s.emit("join", {
-        name: username,
-        x: Math.random() * 200,
-        y: Math.random() * 200
-      });
+/* ============================
+     VARIABLES DEL JUEGO
+   ============================ */
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+let username = "";
+let player = {
+    x: 400,
+    y: 300,
+    speed: 3,
+    hp: 100,
+    wood: 0,
+    stone: 0,
+    food: 0,
+    gold: 0,
+    fort: null
+};
+
+let otherPlayers = {};
+let map = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[] };
+
+let keys = {};
+
+/* ============================
+        INICIAR EL JUEGO
+   ============================ */
+
+function startGame() {
+    const name = document.getElementById("nameInput").value.trim();
+    if (!name) return alert("Escribe un nombre para entrar.");
+
+    username = name;
+
+    document.getElementById("stats").style.display = "block";
+
+    // conectar a servidor
+    socket = io(SERVER_URL, { transports:["websocket"] });
+
+    socket.on("connect", () => {
+        socket.emit("join", { name: username, x: player.x, y: player.y });
     });
 
-    setSocket(s);
-  };
+    socket.on("init", data => {
+        map = data.map;
+        otherPlayers = data.players;
+    });
 
-  if (!connected) {
-    return (
-      <div style={{ padding: 30 }}>
-        <h1>WARFORT</h1>
-        <input
-          style={{ padding: 10, width: 200 }}
-          placeholder="Nombre de usuario"
-          onChange={(e) => setUsername(e.target.value)}
-        />
-        <button style={{ padding: 10, marginLeft: 10 }} onClick={connectGame}>
-          Entrar
-        </button>
-      </div>
-    );
-  }
+    socket.on("state", data => {
+        if (data.players) {
+            for (let id in data.players) {
+                if (data.players[id] === null) delete otherPlayers[id];
+                else otherPlayers[id] = data.players[id];
+            }
+        }
+        if (data.map) map = data.map;
+    });
 
-  return (
-    <div style={{ padding: 20 }}>
-      <h2>Bienvenido a WARFORT, {username}</h2>
-      <p>El juego ya está conectado al servidor.</p>
-      <p>Ahora pega aquí tu lógica del mapa, render, colisiones, crafting, etc.</p>
-    </div>
-  );
+    loop();
 }
 
-ReactDOM.render(<App />, document.getElementById("root"));
+/* ============================
+          MOVIMIENTO
+   ============================ */
 
+document.addEventListener("keydown", e => keys[e.key] = true);
+document.addEventListener("keyup",   e => keys[e.key] = false);
+
+function updatePlayer() {
+    if (keys["w"]) player.y -= player.speed;
+    if (keys["s"]) player.y += player.speed;
+    if (keys["a"]) player.x -= player.speed;
+    if (keys["d"]) player.x += player.speed;
+
+    socket.emit("update", { x: player.x, y: player.y });
+}
+
+/* ============================
+        DIBUJAR JUEGO
+   ============================ */
+
+function draw() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // jugador local
+    ctx.fillStyle = "cyan";
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 10, 0, Math.PI*2);
+    ctx.fill();
+
+    // otros jugadores
+    ctx.fillStyle = "yellow";
+    for (let id in otherPlayers) {
+        const p = otherPlayers[id];
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 10, 0, Math.PI*2);
+        ctx.fill();
+    }
+}
+
+/* ============================
+            LOOP
+   ============================ */
+
+function loop() {
+    updatePlayer();
+    draw();
+    requestAnimationFrame(loop);
+}
 </script>
 
 </body>
