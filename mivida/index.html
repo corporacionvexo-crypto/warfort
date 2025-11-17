@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>MiVida - Juego 2D (esfera)</title>
+  <style>
+    /* Simple CSS: layout, HUD y canvas centrado */
+    body,html { height:100%; margin:0; font-family:Arial,Helvetica,sans-serif; background:#111; color:#eee; display:flex; flex-direction:column; align-items:center;}
+    #root { width:100%; max-width:1200px; flex:1; display:flex; flex-direction:column; gap:8px; padding:8px; box-sizing:border-box;}
+    header{display:flex; justify-content:space-between; align-items:center;}
+    canvas { background:#0b2; width:100%; height:640px; display:block; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,0.6); }
+    .hud { display:flex; gap:8px; align-items:center; }
+    .panel { background:rgba(0,0,0,0.5); padding:8px; border-radius:6px; }
+    .inventory { display:flex; gap:6px; }
+    button { cursor:pointer; }
+    .small { font-size:0.85rem; opacity:0.9; }
+    .fort-color { width:12px;height:12px;border-radius:50%;display:inline-block; margin-right:6px;}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Dependencias vía CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+
+  <script>
+  // ======== Juego 2D en un solo HTML ========
+  const { useState, useEffect, useRef } = React;
+
+  /***** CONFIG *****/
+  const CONFIG = {
+    mapSize: 800,               // tamaño del cuadrado del mapa en px
+    tileSize: 40,
+    playerRadius: 12,
+    resourceRespawnSec: 30,
+    wheelGoldRate: 1,          // oro por tick (tick=1s)
+    wheelTickMs: 1000,
+    maxPlayers: 64,
+    craftRecipes: {
+      'sword': { wood: 3, stone: 2, atk: 4 },
+      'axe': { wood: 2, stone: 3, atk: 3 },
+      'bow': { wood: 3, stone: 1, atk: 2, range: 120 }
+    },
+    helmets: [
+      { id:'helm1', name:'Casco de hierro', bonus:{atk:+2}, desc:'+2 daño' },
+      { id:'helm2', name:'Casco reforzado', bonus:{def:+2}, desc:'+2 defensa' },
+      { id:'helm3', name:'Casco ágil', bonus:{spd:+0.2}, desc:'+velocidad' },
+      { id:'helm4', name:'Casco dorado', bonus:{atk:+1, goldBonus:+0.1}, desc:'+oro extra' }
+    ],
+    fortCount: 5,
+    fortRadius: 80,
+    npcRange: 140,
+  };
+
+  /***** UTILIDADES *****/
+  function randInt(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
+  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
+
+  /***** ENTIDADES PREGENERADAS *****/
+  function generateMapEntities(){
+    const ents = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[] };
+    // create forts
+    for(let i=0;i<CONFIG.fortCount;i++){
+      const fx = randInt(100, CONFIG.mapSize-100), fy = randInt(100, CONFIG.mapSize-100);
+      ents.forts.push({ id:'fort'+i, x:fx, y:fy, color: `hsl(${i*60},80%,60%)` });
+      // place some NPCs near fort
+      for(let n=0;n<3;n++){
+        const angle=Math.random()*Math.PI*2;
+        ents.animals.push({ type:'npc', id:`npc${i}_${n}`, x:fx + Math.cos(angle)*randInt(40,80), y:fy + Math.sin(angle)*randInt(40,80), hp:20, fortId:'fort'+i, hostileTo: null }); // 'hostileTo' determined by player membership
+      }
+    }
+    // trees/bushes/stones
+    for(let i=0;i<30;i++){
+      ents.trees.push({ id:'t'+i, x:randInt(20,CONFIG.mapSize-20), y:randInt(20,CONFIG.mapSize-20), hp:5, lastHarvest:0 });
+      ents.bushes.push({ id:'b'+i, x:randInt(20,CONFIG.mapSize-20), y:randInt(20,CONFIG.mapSize-20), hp:3, lastHarvest:0 });
+      ents.stones.push({ id:'s'+i, x:randInt(20,CONFIG.mapSize-20), y:randInt(20,CONFIG.mapSize-20), hp:4, lastHarvest:0 });
+    }
+    // some animals (cows/pigs)
+    for(let i=0;i<8;i++){
+      ents.animals.push({ type: i%2===0?'cow':'pig', id:'a'+i, x:randInt(20,CONFIG.mapSize-20), y:randInt(20,CONFIG.mapSize-20), hp:6 });
+    }
+    return ents;
+  }
+
+  // Server sync state (client local copy will be initialised from server)
+  const initialMap = generateMapEntities();
+
+  /***** REACT APP *****/
+  function App(){
+    const canvasRef = useRef(null);
+    const [username, setUsername] = useState(localStorage.getItem('mv_user')||'');
+    const [connected, setConnected] = useState(false);
+    const [socket, setSocket] = useState(null);
+    const [players, setPlayers] = useState({}); // players by id (including local)
+    const [mapState, setMapState] = useState({ ...initialMap });
+    const localIdRef = useRef(null);
+    const keysRef = useRef({});
+    const lastTickRef = useRef(Date.now());
+
+    // local player state
+    const playerRef = useRef({
+      id: null, x: CONFIG.mapSize/2, y: CONFIG.mapSize/2, hp:100, maxHp:100, gold:10,
+      wood:0, stone:0, food:0, inventory:[], helmet:null, fort:null, name:''
+    });
+
+    // connect to server when username set
+    useEffect(()=>{
+      if(!username) return;
+      localStorage.setItem('mv_user', username);
+      // connect socket.io (assume same host)
+      const s = io();
+      setSocket(s);
+      s.on('connect', ()=> {
+        setConnected(true);
+        // register player
+        const pid = s.id;
+        localIdRef.current = pid;
+        playerRef.current.id = pid;
+        playerRef.current.name = username;
+        s.emit('join', { id: pid, name: username, x:playerRef.current.x, y:playerRef.current.y });
+      });
+      s.on('init', data => {
+        // initial world snapshot
+        setMapState(data.map);
+        setPlayers(data.players || {});
+      });
+      s.on('state', data => {
+        // update other players & map diffs
+        setPlayers(prev => ({ ...prev, ...data.players }));
+        if(data.map) setMapState(data.map);
+      });
+      s.on('disconnect', ()=> setConnected(false));
+      // cleanup
+      return ()=> { s.disconnect(); setSocket(null); setConnected(false); };
+    }, [username]);
+
+    // keyboard handlers
+    useEffect(()=>{
+      function down(e){ keysRef.current[e.key.toLowerCase()] = true; }
+      function up(e){ keysRef.current[e.key.toLowerCase()] = false; }
+      window.addEventListener('keydown',down); window.addEventListener('keyup',up);
+      return ()=>{ window.removeEventListener('keydown',down); window.removeEventListener('keyup',up); };
+    },[]);
+
+    // game loop
+    useEffect(()=>{
+      let raf;
+      function loop(){
+        const now = Date.now();
+        const dt = Math.min(50, now - lastTickRef.current);
+        lastTickRef.current = now;
+        update(dt);
+        draw();
+        raf = requestAnimationFrame(loop);
+      }
+      raf = requestAnimationFrame(loop);
+      return ()=> cancelAnimationFrame(raf);
+    },[mapState, players]);
+
+    // update game: movement, interactions, wheel gold, NPC AI
+    function update(dt){
+      const p = playerRef.current;
+      // movement
+      let speed = 0.12 * dt * (p.helmet && p.helmet.bonus && p.helmet.bonus.spd ? (1 + p.helmet.bonus.spd) : 1);
+      if(keysRef.current['w'] || keysRef.current['arrowup']) p.y -= speed;
+      if(keysRef.current['s'] || keysRef.current['arrowdown']) p.y += speed;
+      if(keysRef.current['a'] || keysRef.current['arrowleft']) p.x -= speed;
+      if(keysRef.current['d'] || keysRef.current['arrowright']) p.x += speed;
+      // clamp
+      p.x = Math.max(10, Math.min(CONFIG.mapSize-10, p.x));
+      p.y = Math.max(10, Math.min(CONFIG.mapSize-10, p.y));
+      // auto-heal from bushes if standing on one and pressing 'e' to select
+      for(const b of mapState.bushes){
+        if(dist(p,b) < 20 && keysRef.current['e']){
+          // harvest: give food and small heal
+          if(Date.now() - (b.lastHarvest||0) > 800){
+            b.lastHarvest = Date.now();
+            p.food = Math.min(99, p.food + 1);
+            p.hp = Math.min(p.maxHp, p.hp + 2);
+            // update server
+            socket?.emit('harvest', { id: b.id, type:'bush' });
+          }
+        }
+      }
+      // interact with trees/stones: press 'q' to harvest if close
+      if(keysRef.current['q']){
+        for(const t of mapState.trees){
+          if(dist(p,t) < 20 && Date.now() - (t.lastHarvest||0) > 800){
+            t.lastHarvest = Date.now();
+            p.wood = (p.wood||0) + 1;
+            socket?.emit('harvest', { id: t.id, type:'tree' });
+          }
+        }
+        for(const s of mapState.stones){
+          if(dist(p,s) < 20 && Date.now() - (s.lastHarvest||0) > 800){
+            s.lastHarvest = Date.now();
+            p.stone = (p.stone||0) + 1;
+            socket?.emit('harvest', { id: s.id, type:'stone' });
+          }
+        }
+      }
+      // animals: attack with 'space' to kill if close (simplificado)
+      if(keysRef.current[' ']){
+        for(const a of mapState.animals){
+          if(dist(p,a) < 25){
+            // kill animal -> give gold
+            p.gold = (p.gold||0) + 3;
+            socket?.emit('killAnimal', { id: a.id });
+            // remove locally
+            mapState.animals = mapState.animals.filter(x=>x.id!==a.id);
+          }
+        }
+      }
+      // wheel placement: press '1' to drop wheel at player pos
+      if(keysRef.current['1']){
+        // create wheel
+        const wheel = { id:'w'+Date.now(), x:p.x+10, y:p.y+10, owner:p.id, lastTick:Date.now() };
+        mapState.wheels.push(wheel);
+        socket?.emit('placeWheel', wheel);
+        keysRef.current['1'] = false;
+      }
+      // wheel gold accumulation (local predict)
+      for(const w of mapState.wheels){
+        if(Date.now() - (w.lastTick||0) >= CONFIG.wheelTickMs){
+          w.lastTick = Date.now();
+          // increase nearby owner's gold (if owner nearby or global benefit)
+          if(p.id === w.owner && dist(p,w) < 80){
+            p.gold = (p.gold||0) + CONFIG.wheelGoldRate;
+          } else {
+            // if placing should always increase gold bar globally for owner regardless of proximity per your spec:
+            if(p.id === w.owner){
+              p.gold = (p.gold||0) + CONFIG.wheelGoldRate;
+            }
+          }
+        }
+      }
+      // fortress logic: if player belongs to a fort, change color of HP bar (handled in render); NPC AI: if player near and not same fort -> chase/attack
+      for(const npc of mapState.animals.filter(a=>a.type==='npc')){
+        const playerDist = dist(npc, p);
+        const fort = mapState.forts.find(f=>f.id===npc.fortId);
+        if(playerDist < CONFIG.npcRange){
+          // if player is same fort member -> guard (follow player if inside?) else chase
+          if(p.fort && p.fort === npc.fortId){
+            // guard: move to player's side (friendly)
+            const dx = p.x - npc.x, dy = p.y - npc.y;
+            npc.x += dx * 0.02 * (dt/16);
+            npc.y += dy * 0.02 * (dt/16);
+          } else {
+            // hostile: move towards player
+            const dx = p.x - npc.x, dy = p.y - npc.y;
+            const d = Math.hypot(dx,dy) || 1;
+            npc.x += (dx/d) * 0.06 * dt;
+            npc.y += (dy/d) * 0.06 * dt;
+            // if near, damage
+            if(dist(npc,p) < 14){
+              p.hp -= 0.05 * dt;
+            }
+          }
+        } else {
+          // idle slight movement
+          npc.x += (Math.sin(Date.now()/1000 + npc.id.length) )*0.02;
+        }
+      }
+
+      // send periodic update to server
+      if(socket && Date.now() % 200 < 50){
+        socket.emit('update', { id: p.id, x: p.x, y: p.y, hp: p.hp, gold: p.gold, wood: p.wood, stone: p.stone, food: p.food, helmet: p.helmet, fort: p.fort, name: p.name });
+      }
+    }
+
+    // drawing
+    function draw(){
+      const canvas = canvasRef.current;
+      if(!canvas) return;
+      const ctx = canvas.getContext('2d');
+      // retina scaling
+      const DPR = window.devicePixelRatio || 1;
+      canvas.width = CONFIG.mapSize * DPR;
+      canvas.height = CONFIG.mapSize * DPR;
+      canvas.style.width = CONFIG.mapSize + 'px';
+      canvas.style.height = CONFIG.mapSize + 'px';
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+
+      // clear
+      ctx.clearRect(0,0,CONFIG.mapSize,CONFIG.mapSize);
+      // draw ground
+      ctx.fillStyle = '#2b3'; ctx.fillRect(0,0,CONFIG.mapSize,CONFIG.mapSize);
+
+      // forts
+      for(const f of mapState.forts){
+        ctx.beginPath();
+        ctx.strokeStyle = f.color; ctx.lineWidth=2;
+        ctx.rect(f.x-40, f.y-40, 80, 80);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(0,0,0,0.15)';
+        ctx.fillRect(f.x-38, f.y-38, 76, 76);
+        ctx.fillStyle = '#fff'; ctx.font='10px monospace'; ctx.fillText(f.id, f.x-30, f.y-28);
+      }
+
+      // trees
+      for(const t of mapState.trees){
+        ctx.fillStyle = '#164'; ctx.beginPath();
+        ctx.arc(t.x, t.y, 10, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle='#0a0'; ctx.beginPath(); ctx.moveTo(t.x-6,t.y-10); ctx.lineTo(t.x,t.y-26); ctx.lineTo(t.x+6,t.y-10); ctx.fill();
+      }
+      // bushes
+      for(const b of mapState.bushes){
+        ctx.fillStyle = '#2a6'; ctx.beginPath(); ctx.arc(b.x,b.y,7,0,Math.PI*2); ctx.fill();
+      }
+      // stones
+      for(const s of mapState.stones){
+        ctx.fillStyle = '#888'; ctx.beginPath(); ctx.rect(s.x-6,s.y-6,12,12); ctx.fill();
+      }
+      // animals
+      for(const a of mapState.animals){
+        if(a.type==='cow' || a.type==='pig'){
+          ctx.fillStyle = a.type==='cow' ? '#fff' : '#c55';
+          ctx.beginPath(); ctx.ellipse(a.x,a.y,8,6,0,0,Math.PI*2); ctx.fill();
+        } else if(a.type==='npc'){
+          ctx.fillStyle = '#333'; ctx.beginPath(); ctx.arc(a.x,a.y,8,0,Math.PI*2); ctx.fill();
+          // mark fort id
+          ctx.fillStyle = '#fff'; ctx.font='8px monospace'; ctx.fillText(a.fortId.replace('fort','F'), a.x-6, a.y+3);
+        }
+      }
+      // wheels
+      for(const w of mapState.wheels){
+        ctx.save();
+        ctx.translate(w.x,w.y);
+        const r = 12;
+        ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fillStyle='#bb8'; ctx.fill();
+        ctx.strokeStyle='#776'; ctx.stroke();
+        ctx.restore();
+      }
+
+      // other players
+      for(const id in players){
+        const pl = players[id];
+        if(!pl) continue;
+        // skip local (we draw local player last)
+        if(id===localIdRef.current) continue;
+        ctx.fillStyle = '#28f';
+        ctx.beginPath(); ctx.arc(pl.x,pl.y,CONFIG.playerRadius,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle='#fff'; ctx.font='10px monospace'; ctx.fillText(pl.name||'player', pl.x-16, pl.y-18);
+      }
+
+      // local player
+      const p = playerRef.current;
+      ctx.beginPath(); ctx.fillStyle='#fa0'; ctx.arc(p.x,p.y,CONFIG.playerRadius,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#000'; ctx.font='12px monospace'; ctx.fillText(p.name||username, p.x-16, p.y-20);
+
+      // HUD overlay (drawn in HTML, but we can show mini on canvas)
+    }
+
+    // UI actions: craft, equip helmet, join fort, use paper (group)
+    function craft(item){
+      const p = playerRef.current;
+      const recipe = CONFIG.craftRecipes[item];
+      if(!recipe) return alert('Receta no existe');
+      if((p.wood||0) < recipe.wood || (p.stone||0) < recipe.stone) return alert('Recursos insuficientes');
+      p.wood -= recipe.wood; p.stone -= recipe.stone;
+      p.inventory.push({ type:item, props: recipe });
+      alert(item + ' creado!');
+      socket?.emit('craft', { playerId: p.id, item });
+    }
+
+    function buyHelmet(idx){
+      const p = playerRef.current;
+      const h = CONFIG.helmets[idx];
+      const cost = 10 + idx*5;
+      if((p.gold||0) < cost) return alert('No tienes oro');
+      p.gold -= cost; p.helmet = h;
+      socket?.emit('buyHelmet', { playerId: p.id, helmet: h.id });
+    }
+
+    // join a fort by selecting from menu; use an item "paper" to open menu (simulate)
+    function usePaper(){
+      const p = playerRef.current;
+      // if has a 'paper' in inventory --> open menu
+      const idx = p.inventory.findIndex(i=>i.type==='paper');
+      if(idx===-1) return alert('No tienes papel para elegir fortaleza');
+      // show choose prompt (simple)
+      const choice = prompt('Elige fortaleza 0..'+(CONFIG.fortCount-1));
+      const fortId = 'fort'+(parseInt(choice) || 0);
+      p.fort = fortId;
+      p.inventory.splice(idx,1);
+      alert('Te uniste a ' + fortId);
+      socket?.emit('joinFort', { playerId:p.id, fort: fortId });
+    }
+
+    function spawnPaper(){
+      playerRef.current.inventory.push({ type:'paper' });
+      alert('Obtuviste un papel (usa para unirte a una fortaleza).');
+    }
+
+    // simple UI render
+    return React.createElement('div', {},
+      React.createElement('header', {},
+        React.createElement('div', {style:{display:'flex',alignItems:'center',gap:8}},
+          React.createElement('h2', {style:{margin:0}}, 'MiVida - Juego 2D'),
+          React.createElement('div', {className:'small panel'}, connected ? 'Conectado' : 'Desconectado')
+        ),
+        React.createElement('div', {className:'hud'},
+          React.createElement('div', {className:'panel small'}, 'Usuario: ' + (username || '—')),
+          React.createElement('div', {className:'panel small'}, React.createElement('button', {onClick:()=>{ const n = prompt('Nombre de usuario:'); if(n) setUsername(n); }}, username? 'Cambiar usuario':'Iniciar (poner nombre)'))
+        )
+      ),
+      React.createElement('div', {style:{display:'flex', gap:8}},
+        React.createElement('div', {style:{flex:'1 1 720px'}},
+          React.createElement('canvas', {ref:canvasRef, width:CONFIG.mapSize, height:CONFIG.mapSize})
+        ),
+        React.createElement('div', {style:{width:320, display:'flex', flexDirection:'column', gap:8}},
+          React.createElement('div', {className:'panel'}, React.createElement('strong', null, 'Estado')),
+          React.createElement('div', {className:'panel small'}, 
+            React.createElement('div', null, 'HP: ' + Math.round(playerRef.current.hp) + '/' + playerRef.current.maxHp),
+            React.createElement('div', null, 'Oro: ' + (playerRef.current.gold||0)),
+            React.createElement('div', null, 'Madera: ' + (playerRef.current.wood||0) + ' Piedra: ' + (playerRef.current.stone||0)),
+            React.createElement('div', null, 'Comida: ' + (playerRef.current.food||0)),
+            React.createElement('div', null, 'Fortaleza: ' + (playerRef.current.fort || 'ninguna'))
+          ),
+          React.createElement('div', {className:'panel'}, React.createElement('strong', null, 'Craft / Colocar Rueda')),
+          React.createElement('div', {className:'panel small'},
+            React.createElement('button', {onClick:()=>craft('sword')}, 'Crear espada (q to recolectar)'),
+            React.createElement('button', {style:{marginLeft:6}, onClick:()=>craft('axe')}, 'Crear hacha'),
+            React.createElement('button', {style:{marginLeft:6}, onClick:()=>craft('bow')}, 'Crear arco'),
+            React.createElement('div', {style:{marginTop:6}}, 'Presiona 1 para colocar una rueda (genera oro).'),
+          ),
+          React.createElement('div', {className:'panel'}, React.createElement('strong', null, 'Casco')),
+          React.createElement('div', {className:'panel small'},
+            CONFIG.helmets.map((h,idx)=>React.createElement('div', {key:h.id, style:{marginBottom:6}},
+              React.createElement('div', null, h.name + ' — ' + h.desc + ' — Costo: ' + (10+idx*5) + ' oro'),
+              React.createElement('button', {onClick:()=>buyHelmet(idx)}, 'Comprar y equipar')
+            ))
+          ),
+          React.createElement('div', {className:'panel'}, React.createElement('strong', null, 'Artículos / Fortalezas')),
+          React.createElement('div', {className:'panel small'},
+            React.createElement('div', null, 'Inventario: ' + playerRef.current.inventory.map(i=>i.type).join(', ')),
+            React.createElement('button', {onClick:spawnPaper}, 'Obtener papel (para unirse)'),
+            React.createElement('button', {onClick:usePaper, style:{marginLeft:6}}, 'Usar papel (unirse)')
+          ),
+          React.createElement('div', {className:'panel small'}, React.createElement('div', null, 'Controles: WASD mover, Q recolectar, E usar arbusto (cura), Space atacar, 1 colocar rueda'))
+        )
+      ),
+      React.createElement('footer', {style:{marginTop:8}}, React.createElement('div', {className:'small'}, 'Servidor Socket.IO requerido para multijugador.'))
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+  </script>
+</body>
+</html>
