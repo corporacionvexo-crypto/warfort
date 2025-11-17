@@ -1,349 +1,605 @@
-// ==============================================
-//  WARFORT Backend - Persistencia, Clanes, Misiones,
-//  Golpes entre jugadores (anti-hack) y eventos globales
-//  LISTO PARA COPIAR Y PEGAR
-// ==============================================
-
-/*
-  Dependencias:
-    npm i express cors socket.io sqlite3
-*/
+// server.js
+// WARFORT+ Backend - FULL OPTIMIZADA WARFORT+
+// Ready to copy & paste
+//
+// Dependencias:
+//   npm i express cors socket.io sqlite3 uuid
+//
+// Uso:
+//   node server.js
+// ------------------------------------------------
 
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-const port = process.env.PORT || 3000;
-
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use(cors({ origin: "*", methods: ["GET", "POST", "PUT", "DELETE"] }));
-
-process.on("uncaughtException", err => console.error("❌ Error no capturado:", err));
-process.on("unhandledRejection", err => console.error("❌ Promesa no manejada:", err));
-
-// ============== HTTP + SOCKET.IO ============
 const server = http.createServer(app);
-const { Server } = require("socket.io");
-const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
-  pingInterval: 2000,
-  pingTimeout: 4000
-});
 
-// ============== DB (SQLite) =================
+// CONFIG
+const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'warfort.db');
-const db = new sqlite3.Database(DB_FILE, (err) => {
-  if (err) return console.error("DB ERROR:", err);
-  console.log("✅ SQLite conectado:", DB_FILE);
+const IO_PING_INTERVAL = 2000;
+const IO_PING_TIMEOUT = 4000;
+
+// MIDDLEWARE
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use(cors({ origin: '*' }));
+
+// LOGGING BÁSICO
+const log = (...args) => console.log('[WARFORT]', ...args);
+process.on('uncaughtException', e => console.error('[UNCAUGHT]', e));
+process.on('unhandledRejection', e => console.error('[UNHANDLED_REJ]', e));
+
+// SOCKET.IO
+const { Server } = require('socket.io');
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  pingInterval: IO_PING_INTERVAL,
+  pingTimeout: IO_PING_TIMEOUT
 });
 
-const run = (sql, params=[]) => new Promise((res, rej) => db.run(sql, params, function(err){ err ? rej(err) : res(this); }));
-const get = (sql, params=[]) => new Promise((res, rej) => db.get(sql, params, (err,row)=> err?rej(err):res(row)));
-const all = (sql, params=[]) => new Promise((res, rej) => db.all(sql, params, (err,rows)=> err?rej(err):res(rows)));
+// =====================
+// DATABASE (SQLite)
+// =====================
+const db = new sqlite3.Database(DB_FILE, err => {
+  if (err) return console.error('SQLite connect error:', err);
+  log('SQLite conectado:', DB_FILE);
+});
 
-// Inicializar tablas
-(async () => {
-  await run(`CREATE TABLE IF NOT EXISTS players (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    role TEXT,
-    x REAL,
-    y REAL,
-    hp INTEGER,
-    kills INTEGER,
-    fort TEXT,
-    last_login INTEGER
-  )`);
+// promisified helpers
+const run = (sql, params = []) => new Promise((res, rej) =>
+  db.run(sql, params, function (err) { err ? rej(err) : res(this); })
+);
+const get = (sql, params = []) => new Promise((res, rej) =>
+  db.get(sql, params, (err, row) => err ? rej(err) : res(row))
+);
+const all = (sql, params = []) => new Promise((res, rej) =>
+  db.all(sql, params, (err, rows) => err ? rej(err) : res(rows))
+);
 
-  await run(`CREATE TABLE IF NOT EXISTS map_state (
-    key TEXT PRIMARY KEY,
-    json TEXT
-  )`);
+// Inicializar esquema
+(async function initDb() {
+  try {
+    await run(`CREATE TABLE IF NOT EXISTS players (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      role TEXT,
+      x REAL,
+      y REAL,
+      hp INTEGER,
+      kills INTEGER,
+      fort TEXT,
+      inventory_json TEXT,
+      last_login INTEGER
+    )`);
 
-  await run(`CREATE TABLE IF NOT EXISTS clans (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    owner TEXT,
-    created_at INTEGER
-  )`);
+    await run(`CREATE TABLE IF NOT EXISTS map_state (
+      key TEXT PRIMARY KEY,
+      json TEXT
+    )`);
 
-  await run(`CREATE TABLE IF NOT EXISTS clan_members (
-    clan_id TEXT,
-    player_id TEXT,
-    role TEXT DEFAULT 'member',
-    PRIMARY KEY (clan_id, player_id)
-  )`);
+    await run(`CREATE TABLE IF NOT EXISTS clans (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      owner TEXT,
+      created_at INTEGER
+    )`);
 
-  await run(`CREATE TABLE IF NOT EXISTS missions (
-    id TEXT PRIMARY KEY,
-    title TEXT,
-    description TEXT,
-    reward_json TEXT,
-    active INTEGER DEFAULT 1,
-    created_at INTEGER,
-    reset_every INTEGER DEFAULT 86400
-  )`);
+    await run(`CREATE TABLE IF NOT EXISTS clan_members (
+      clan_id TEXT,
+      player_id TEXT,
+      role TEXT DEFAULT 'member',
+      PRIMARY KEY (clan_id, player_id)
+    )`);
 
-  await run(`CREATE TABLE IF NOT EXISTS mission_claims (
-    mission_id TEXT,
-    player_id TEXT,
-    claimed_at INTEGER,
-    PRIMARY KEY (mission_id, player_id)
-  )`);
+    await run(`CREATE TABLE IF NOT EXISTS missions (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      description TEXT,
+      reward_json TEXT,
+      active INTEGER DEFAULT 1,
+      created_at INTEGER,
+      reset_every INTEGER DEFAULT 86400
+    )`);
 
-  // Estado inicial del mapa
-  const mapRow = await get(`SELECT json FROM map_state WHERE key = ?`, ['global']);
-  if (!mapRow) {
-    const initial = JSON.stringify({ trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[], loot:[] });
-    await run(`INSERT INTO map_state (key, json) VALUES (?, ?)`, ['global', initial]);
+    await run(`CREATE TABLE IF NOT EXISTS mission_claims (
+      mission_id TEXT,
+      player_id TEXT,
+      claimed_at INTEGER,
+      PRIMARY KEY (mission_id, player_id)
+    )`);
+
+    // Inicial map_state si falta
+    const mapRow = await get(`SELECT json FROM map_state WHERE key = ?`, ['global']);
+    if (!mapRow) {
+      const initial = JSON.stringify({ trees: [], bushes: [], stones: [], animals: [], wheels: [], forts: [], loot: [] });
+      await run(`INSERT INTO map_state (key, json) VALUES (?, ?)`, ['global', initial]);
+      log('map_state inicial creado');
+    }
+
+    // Misiones base si no existen
+    const missionsCount = await get(`SELECT COUNT(1) as c FROM missions`);
+    if (!missionsCount || missionsCount.c === 0) {
+      const now = Date.now();
+      await run(`INSERT INTO missions (id, title, description, reward_json, active, created_at, reset_every)
+        VALUES (?, ?, ?, ?, 1, ?, ?)`, [
+        'm_daily_1',
+        'Caza 3 animales',
+        'Elimina 3 animales para completar la misión diaria.',
+        JSON.stringify({ xp: 50, gold: 10 }),
+        now,
+        86400
+      ]);
+      await run(`INSERT INTO missions (id, title, description, reward_json, active, created_at, reset_every)
+        VALUES (?, ?, ?, ?, 1, ?, ?)`, [
+        'm_daily_2',
+        'Recolecta madera',
+        'Recoge 10 unidades de madera.',
+        JSON.stringify({ xp: 30, wood: 10 }),
+        now,
+        86400
+      ]);
+      log('Misiones base creadas');
+    }
+
+    log('DB init complete');
+  } catch (e) {
+    console.error('DB init error:', e);
   }
+})();
 
-  // Misiones iniciales
-  const missionsExist = await get(`SELECT COUNT(1) as c FROM missions`);
-  if (!missionsExist || missionsExist.c === 0) {
-    const now = Date.now();
-    await run(`INSERT INTO missions VALUES (?, ?, ?, ?, 1, ?, ?)`, [
-      'm_daily_1',
-      'Caza 3 animales',
-      'Elimina 3 animales para completar la misión diaria.',
-      JSON.stringify({ xp:50, gold:10 }),
-      now,
-      86400
-    ]);
+// =====================
+// IN-MEMORY STATE
+// =====================
+let mapState = { trees: [], bushes: [], stones: [], animals: [], wheels: [], forts: [], loot: [] };
+let players = {}; // socketId -> player object
 
-    await run(`INSERT INTO missions VALUES (?, ?, ?, ?, 1, ?, ?)`, [
-      'm_daily_2',
-      'Recolecta madera',
-      'Recoge 10 unidades de madera.',
-      JSON.stringify({ xp:30, wood:10 }),
-      now,
-      86400
-    ]);
-  }
-
-})().catch(e => console.error("Init DB Error:", e));
-
-// ============== ESTADO EN MEMORIA ===========
-let mapState = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[], loot:[] };
-let players = {}; 
-
-// Cargar mapState desde DB
 (async () => {
   try {
     const row = await get(`SELECT json FROM map_state WHERE key = ?`, ['global']);
     if (row && row.json) mapState = JSON.parse(row.json);
-    console.log("✅ mapState cargado");
-  } catch (err) { console.error("Error al cargar mapState:", err); }
+    log('mapState cargado desde DB');
+  } catch (e) {
+    console.error('Error cargando mapState:', e);
+  }
 })();
 
-// Helper
+// =====================
+// UTILIDADES
+// =====================
 const safe = (obj, keys) => keys.every(k => obj && obj[k] !== undefined);
-const rand = (min, max) => Math.random() * (max - min) + min;
+const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 const persistMapState = async () => {
-  await run(`UPDATE map_state SET json = ? WHERE key = ?`, [JSON.stringify(mapState), 'global']);
+  try {
+    await run(`UPDATE map_state SET json = ? WHERE key = ?`, [JSON.stringify(mapState), 'global']);
+  } catch (e) {
+    console.error('persistMapState error:', e);
+  }
 };
 
 const upsertPlayerDB = async (p) => {
-  await run(
-    `INSERT INTO players VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET 
-       name=excluded.name, role=excluded.role, x=excluded.x, y=excluded.y,
-       hp=excluded.hp, kills=excluded.kills, fort=excluded.fort, last_login=excluded.last_login`,
-    [p.id, p.name, p.role, p.x, p.y, p.hp, p.kills, p.fort, Date.now()]
-  );
+  try {
+    await run(
+      `INSERT INTO players (id,name,role,x,y,hp,kills,fort,inventory_json,last_login)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name=excluded.name, role=excluded.role, x=excluded.x, y=excluded.y, hp=excluded.hp,
+         kills=excluded.kills, fort=excluded.fort, inventory_json=excluded.inventory_json, last_login=excluded.last_login`,
+      [p.id, p.name, p.role || 'player', p.x || 0, p.y || 0, p.hp || 100, p.kills || 0, p.fort || null, JSON.stringify(p.inventory || {}), Date.now()]
+    );
+  } catch (e) {
+    console.error('upsertPlayerDB error:', e);
+  }
 };
 
-// Respawn
 const respawnPlayer = async (id) => {
-  if (!players[id]) return;
-  players[id].x = rand(100, 900);
-  players[id].y = rand(100, 900);
-  players[id].hp = 100;
-  await upsertPlayerDB(players[id]);
-  io.emit("state", { players: { [id]: players[id] } });
+  try {
+    if (!players[id]) return;
+    players[id].x = rand(100, 900);
+    players[id].y = rand(100, 900);
+    players[id].hp = 100;
+    await upsertPlayerDB(players[id]);
+    io.emit('state', { players: { [id]: players[id] } });
+  } catch (e) {
+    console.error('respawnPlayer error:', e);
+  }
 };
 
-// ============== SOCKET.IO ==================
-io.on("connection", (socket) => {
+// =====================
+// SOCKET.IO HANDLERS
+// =====================
+io.on('connection', (socket) => {
+  log('Connection:', socket.id);
 
-  socket.emit("init", { map: mapState, players });
+  // Enviar estado inicial
+  socket.emit('init', { map: mapState, players });
 
-  // Join
-  socket.on("join", async (data) => {
-    if (!data || !data.name) return;
+  // JOIN: crear o cargar jugador
+  socket.on('join', async (data) => {
+    try {
+      const name = (data && data.name) ? String(data.name).slice(0, 30) : `Player-${socket.id.slice(0,4)}`;
+      const role = (data && ['player', 'mod', 'admin'].includes(data.role)) ? data.role : 'player';
 
-    const existing = await get(`SELECT * FROM players WHERE id = ?`, [socket.id]);
+      // intentar cargar desde DB por id (si existiera con la misma socket id en DB por casualidad)
+      const existing = await get(`SELECT * FROM players WHERE id = ?`, [socket.id]);
+      if (existing) {
+        players[socket.id] = {
+          id: existing.id,
+          name: existing.name,
+          role: existing.role || 'player',
+          x: existing.x || rand(100, 900),
+          y: existing.y || rand(100, 900),
+          hp: existing.hp !== null ? existing.hp : 100,
+          kills: existing.kills || 0,
+          fort: existing.fort || null,
+          inventory: existing.inventory_json ? JSON.parse(existing.inventory_json) : {}
+        };
+      } else {
+        players[socket.id] = {
+          id: socket.id,
+          name,
+          role,
+          x: (data && data.x) || rand(100, 900),
+          y: (data && data.y) || rand(100, 900),
+          hp: 100,
+          kills: 0,
+          fort: null,
+          inventory: {}
+        };
+      }
 
-    if (existing) {
-      players[socket.id] = { ...existing };
-    } else {
-      players[socket.id] = {
-        id: socket.id,
-        name: data.name.slice(0,20),
-        role: ['player','mod','admin'].includes(data.role) ? data.role : 'player',
-        x: rand(100,900),
-        y: rand(100,900),
-        hp: 100,
-        kills: 0,
-        fort: null
-      };
+      await upsertPlayerDB(players[socket.id]);
+      socket.emit('init', { map: mapState, players });
+      io.emit('state', { players: { [socket.id]: players[socket.id] } });
+
+      log(`Player joined: ${players[socket.id].name} (${socket.id})`);
+    } catch (e) {
+      console.error('join error:', e);
     }
-
-    await upsertPlayerDB(players[socket.id]);
-    io.emit("state", { players: { [socket.id]: players[socket.id] } });
   });
 
-  // Movimiento
-  socket.on("update", async (data) => {
-    if (!players[socket.id]) return;
-    players[socket.id] = { ...players[socket.id], ...data };
-    await upsertPlayerDB(players[socket.id]);
-    socket.broadcast.emit("state", { players: { [socket.id]: players[socket.id] } });
-  });
+  // Movimiento / update parcial
+  socket.on('update', async (data) => {
+    try {
+      if (!players[socket.id]) return;
+      // Permitir solo campos esperados
+      const allowed = ['x', 'y', 'hp', 'kills', 'fort'];
+      for (const k in data) if (!allowed.includes(k)) delete data[k];
 
-  // Chat
-  socket.on("chat", msg => {
-    if (!players[socket.id]) return;
-    io.emit("chat", { id: socket.id, name: players[socket.id].name, msg: msg.slice(0,300) });
-  });
-
-  // Colocar ruedas
-  socket.on("placeWheel", async (wheel) => {
-    if (!safe(wheel, ["x","y","id"])) return;
-    mapState.wheels.push(wheel);
-    await persistMapState();
-    io.emit("state", { map: mapState });
-  });
-
-  // Loot
-  socket.on("pickupLoot", async (d) => {
-    mapState.loot = mapState.loot.filter(l => l.id !== d.id);
-    await persistMapState();
-    io.emit("state", { map: mapState });
-  });
-
-  // Matar animal
-  socket.on("killAnimal", async (d) => {
-    mapState.animals = mapState.animals.filter(a => a.id !== d.id);
-    await persistMapState();
-    io.emit("state", { map: mapState });
-  });
-
-  // ========== GOLPE ENTRE JUGADORES (ANTI-HACK) ==========
-  socket.on("hit", data => {
-    if (!players[socket.id]) return;
-    if (!players[data.target]) return;
-
-    const attacker = players[socket.id];
-    const target = players[data.target];
-
-    // Distancia máxima permitida
-    const dx = attacker.x - target.x;
-    const dy = attacker.y - target.y;
-    const distance = Math.sqrt(dx*dx + dy*dy);
-
-    if (distance > 50) return;  // Anti-hack
-
-    target.hp -= 10;
-
-    if (target.hp <= 0) {
-      target.hp = 0;
-      io.emit("playerDeath", { id: target.id, killer: attacker.id });
-      respawnPlayer(target.id);
+      players[socket.id] = { ...players[socket.id], ...data };
+      await upsertPlayerDB(players[socket.id]);
+      socket.broadcast.emit('state', { players: { [socket.id]: players[socket.id] } });
+    } catch (e) {
+      console.error('update error:', e);
     }
-
-    io.emit("hitResult", {
-      attacker: attacker.id,
-      target: target.id,
-      hp: target.hp
-    });
   });
 
-  // Salida
-  socket.on("disconnect", async () => {
-    if (players[socket.id]) await upsertPlayerDB(players[socket.id]);
+  // CHAT simple (limitado)
+  socket.on('chat', (msg) => {
+    if (!players[socket.id]) return;
+    try {
+      const text = String(msg).slice(0, 300);
+      io.emit('chat', { id: socket.id, name: players[socket.id].name, role: players[socket.id].role, msg: text });
+    } catch (e) {
+      console.error('chat error:', e);
+    }
+  });
+
+  // PLACE WHEEL
+  socket.on('placeWheel', async (wheel) => {
+    try {
+      if (!safe(wheel, ['id', 'x', 'y'])) return;
+      mapState.wheels.push({ id: String(wheel.id), x: Number(wheel.x), y: Number(wheel.y) });
+      await persistMapState();
+      io.emit('state', { map: mapState });
+    } catch (e) { console.error('placeWheel error:', e); }
+  });
+
+  // PICKUP LOOT
+  socket.on('pickupLoot', async (data) => {
+    try {
+      if (!safe(data, ['id'])) return;
+      mapState.loot = mapState.loot.filter(l => l.id !== data.id);
+      await persistMapState();
+      io.emit('state', { map: mapState });
+    } catch (e) { console.error('pickupLoot error:', e); }
+  });
+
+  // KILL ANIMAL
+  socket.on('killAnimal', async (data) => {
+    try {
+      if (!safe(data, ['id'])) return;
+      mapState.animals = mapState.animals.filter(a => a.id !== data.id);
+      await persistMapState();
+      io.emit('state', { map: mapState });
+    } catch (e) { console.error('killAnimal error:', e); }
+  });
+
+  // JOIN FORT
+  socket.on('joinFort', async (data) => {
+    try {
+      if (!safe(data, ['fort'])) return;
+      if (!players[socket.id]) return;
+      players[socket.id].fort = data.fort;
+      await upsertPlayerDB(players[socket.id]);
+      io.emit('state', { players: { [socket.id]: players[socket.id] } });
+    } catch (e) { console.error('joinFort error:', e); }
+  });
+
+  // ----------------------------
+  // HIT entre jugadores (anti-hack y seguro)
+  // payload: { target: "<socketId>", dmg: <number>, type: "melee"|"arrow" }
+  // ----------------------------
+  socket.on('hit', async (data) => {
+    try {
+      if (!players[socket.id]) return;
+      if (!data || !data.target) return;
+      const targetId = String(data.target);
+      if (!players[targetId]) return;
+
+      const attacker = players[socket.id];
+      const target = players[targetId];
+
+      // CALCULA DISTANCIA: anti-hack para melee
+      const dx = (attacker.x || 0) - (target.x || 0);
+      const dy = (attacker.y || 0) - (target.y || 0);
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      const dmg = Number(data.dmg) || (data.type === 'arrow' ? 15 : 10);
+
+      // Si es melee, exigir distancia <= 60
+      if (!data.type || data.type === 'melee') {
+        if (distance > 60) return;
+      } else if (data.type === 'arrow') {
+        // arrows allowed at longer distance (but max 800)
+        if (distance > 1200) return;
+      }
+
+      // Apply damage
+      target.hp = (target.hp || 100) - dmg;
+
+      if (target.hp <= 0) {
+        // KILL
+        target.hp = 0;
+        attacker.kills = (attacker.kills || 0) + 1;
+        await upsertPlayerDB(attacker);
+        io.emit('killfeed', { killer: attacker.name, victim: target.name });
+        await respawnPlayer(targetId);
+      } else {
+        await upsertPlayerDB(target);
+        io.emit('state', { players: { [targetId]: target } });
+      }
+
+      // Resultado del golpe al autor y al objetivo
+      io.to(socket.id).emit('hitResult', { attacker: socket.id, target: targetId, hp: target.hp });
+      io.to(targetId).emit('hitTaken', { attacker: socket.id, hp: target.hp });
+
+    } catch (e) {
+      console.error('hit handler error:', e);
+    }
+  });
+
+  // DISCONNECT
+  socket.on('disconnect', async () => {
+    try {
+      if (players[socket.id]) await upsertPlayerDB(players[socket.id]);
+    } catch (e) {
+      console.error('disconnect persist error:', e);
+    }
     delete players[socket.id];
-    io.emit("state", { players: { [socket.id]: null } });
+    io.emit('state', { players: { [socket.id]: null } });
+    log('Disconnect:', socket.id);
   });
 
 });
 
-// ============== RUTAS: CLANES ==================
-
-app.post("/clans", async (req,res) => {
+// =====================
+// HTTP API - Clanes
+// =====================
+app.post('/clans', async (req, res) => {
   try {
     const { id, name, owner } = req.body;
-    if (!id || !name || !owner) return res.json({ ok:false });
+    if (!id || !name || !owner) return res.status(400).json({ ok: false, error: 'id,name,owner required' });
 
-    await run(`INSERT INTO clans VALUES (?, ?, ?, ?)`, [id,name,owner,Date.now()]);
-    await run(`INSERT INTO clan_members VALUES (?, ?, ?)`, [id,owner,'owner']);
-    res.json({ ok:true });
-  } catch (e) { res.json({ ok:false }); }
-});
+    const exists = await get(`SELECT id FROM clans WHERE id = ?`, [id]);
+    if (exists) return res.status(409).json({ ok: false, error: 'clan exists' });
 
-app.post("/clans/:id/join", async (req,res) => {
-  const { id } = req.params;
-  const { player_id } = req.body;
-  await run(`INSERT INTO clan_members VALUES (?, ?, ?)`, [id, player_id, 'member']);
-  res.json({ ok:true });
-});
-
-app.get("/clans/:id", async (req,res) => {
-  const clan = await get(`SELECT * FROM clans WHERE id = ?`, [req.params.id]);
-  const members = await all(`SELECT * FROM clan_members WHERE clan_id = ?`, [req.params.id]);
-  res.json({ ok:true, clan, members });
-});
-
-// ============== RUTAS: MISIONES ================
-
-app.get("/missions", async (req,res) => {
-  const missions = await all(`SELECT * FROM missions WHERE active = 1`);
-  missions.forEach(m => m.reward = JSON.parse(m.reward_json));
-  res.json({ ok:true, missions });
-});
-
-app.post("/missions/:id/claim", async (req,res) => {
-  const { id } = req.params;
-  const { player_id } = req.body;
-
-  const already = await get(`SELECT * FROM mission_claims WHERE mission_id = ? AND player_id = ?`, [id, player_id]);
-  if (already) return res.json({ ok:false, error:"already" });
-
-  await run(`INSERT INTO mission_claims VALUES (?, ?, ?)`, [id, player_id, Date.now()]);
-  res.json({ ok:true });
-});
-
-// Reset misiones cada minuto
-setInterval(async () => {
-  const missions = await all(`SELECT id, reset_every FROM missions`);
-  const now = Date.now();
-  for (const m of missions) {
-    const cut = now - (m.reset_every * 1000);
-    await run(`DELETE FROM mission_claims WHERE mission_id = ? AND claimed_at < ?`, [m.id, cut]);
+    await run(`INSERT INTO clans (id,name,owner,created_at) VALUES (?, ?, ?, ?)`, [id, name, owner, Date.now()]);
+    await run(`INSERT INTO clan_members (clan_id, player_id, role) VALUES (?, ?, ?)`, [id, owner, 'owner']);
+    res.json({ ok: true, clan: { id, name, owner } });
+  } catch (e) {
+    console.error('/clans error:', e);
+    res.status(500).json({ ok: false, error: e.message });
   }
-}, 60000);
+});
 
-// ============== SISTEMAS PERIODICOS ============
+app.post('/clans/:id/join', async (req, res) => {
+  try {
+    const clanId = req.params.id;
+    const { player_id } = req.body;
+    if (!player_id) return res.status(400).json({ ok: false, error: 'player_id required' });
 
-// Loot automático cada 15s
+    const clan = await get(`SELECT id FROM clans WHERE id = ?`, [clanId]);
+    if (!clan) return res.status(404).json({ ok: false, error: 'clan not found' });
+
+    const member = await get(`SELECT player_id FROM clan_members WHERE clan_id = ? AND player_id = ?`, [clanId, player_id]);
+    if (member) return res.status(409).json({ ok: false, error: 'already member' });
+
+    await run(`INSERT INTO clan_members (clan_id, player_id, role) VALUES (?, ?, ?)`, [clanId, player_id, 'member']);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('/clans/:id/join error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/clans/:id', async (req, res) => {
+  try {
+    const clanId = req.params.id;
+    const clan = await get(`SELECT * FROM clans WHERE id = ?`, [clanId]);
+    if (!clan) return res.status(404).json({ ok: false });
+    const members = await all(`SELECT player_id, role FROM clan_members WHERE clan_id = ?`, [clanId]);
+    res.json({ ok: true, clan, members });
+  } catch (e) {
+    console.error('/clans/:id error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// =====================
+// HTTP API - Missions
+// =====================
+app.get('/missions', async (req, res) => {
+  try {
+    const missions = await all(`SELECT id, title, description, reward_json, active, created_at, reset_every FROM missions WHERE active = 1`);
+    const parsed = missions.map(m => ({ ...m, reward: JSON.parse(m.reward_json || '{}') }));
+    res.json({ ok: true, missions: parsed });
+  } catch (e) {
+    console.error('/missions error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/missions/:id/claim', async (req, res) => {
+  try {
+    const missionId = req.params.id;
+    const { player_id } = req.body;
+    if (!player_id) return res.status(400).json({ ok: false, error: 'player_id required' });
+
+    const mission = await get(`SELECT * FROM missions WHERE id = ? AND active = 1`, [missionId]);
+    if (!mission) return res.status(404).json({ ok: false, error: 'mission not found' });
+
+    const already = await get(`SELECT * FROM mission_claims WHERE mission_id = ? AND player_id = ?`, [missionId, player_id]);
+    if (already) return res.status(409).json({ ok: false, error: 'already claimed' });
+
+    await run(`INSERT INTO mission_claims (mission_id, player_id, claimed_at) VALUES (?, ?, ?)`, [missionId, player_id, Date.now()]);
+
+    // Emitir evento en socket si está conectado
+    const reward = JSON.parse(mission.reward_json || '{}');
+    // si player_id coincide con socket id, emitirle directamente
+    io.to(player_id).emit('missionClaimed', { missionId, reward });
+
+    res.json({ ok: true, mission: { id: missionId, reward } });
+  } catch (e) {
+    console.error('/missions/:id/claim error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Reset automático de claims según reset_every (cada minuto)
 setInterval(async () => {
-  const loot = { id:`loot_${Date.now()}`, x:rand(50,900), y:rand(50,900), type:["wood","stone","meat"][Math.floor(Math.random()*3)] };
-  mapState.loot.push(loot);
-  await persistMapState();
-  io.emit("mapLoot", { loot });
-}, 15000);
+  try {
+    const missions = await all(`SELECT id, reset_every FROM missions WHERE active = 1`);
+    const now = Date.now();
+    for (const m of missions) {
+      const cutoff = now - (m.reset_every * 1000);
+      await run(`DELETE FROM mission_claims WHERE mission_id = ? AND claimed_at < ?`, [m.id, cutoff]);
+    }
+  } catch (e) {
+    console.error('missions reset error:', e);
+  }
+}, 60 * 1000);
 
-// Evento de clima
+// =====================
+// ADMIN / UTIL ENDPOINTS
+// =====================
+app.get('/status', async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      playersConnected: Object.keys(players).length,
+      mapCounts: {
+        trees: mapState.trees.length,
+        animals: mapState.animals.length,
+        loot: mapState.loot.length
+      },
+      uptime: process.uptime()
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/admin/save-map', async (req, res) => {
+  try {
+    await persistMapState();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/admin/spawn-loot', async (req, res) => {
+  try {
+    const { id, x, y, type } = req.body;
+    const loot = { id: id || `loot_${Date.now()}`, x: Number(x) || rand(50, 900), y: Number(y) || rand(50, 900), type: String(type || 'wood') };
+    mapState.loot.push(loot);
+    await persistMapState();
+    io.emit('state', { map: mapState });
+    res.json({ ok: true, loot });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// =====================
+// PERIODIC SYSTEMS
+// =====================
+
+// Auto-spawn loot each 15s
+setInterval(async () => {
+  try {
+    const loot = { id: `loot_${Date.now()}`, x: rand(50, 900), y: rand(50, 900), type: ['wood', 'stone', 'meat'][Math.floor(Math.random() * 3)] };
+    mapState.loot.push(loot);
+    await persistMapState();
+    io.emit('mapLoot', { loot });
+  } catch (e) {
+    console.error('auto loot error:', e);
+  }
+}, 15 * 1000);
+
+// Global storm event every 60s (example)
 setInterval(() => {
-  io.emit("storm", { intensity: Math.floor(rand(1,5)), ts: Date.now() });
-}, 60000);
+  try {
+    const intensity = rand(1, 5);
+    io.emit('storm', { intensity, ts: Date.now() });
+  } catch (e) {
+    console.error('storm emit error:', e);
+  }
+}, 60 * 1000);
 
-// ============== START SERVER ===================
-server.listen(port, () => {
-  console.log(`🚀 WARFORT backend funcionando en puerto ${port}`);
+// =====================
+// GRACEFUL SHUTDOWN
+// =====================
+const shutdown = async () => {
+  log('Shutting down, persisting players and map...');
+  try {
+    // persist players
+    for (const id of Object.keys(players)) {
+      await upsertPlayerDB(players[id]);
+    }
+    await persistMapState();
+  } catch (e) {
+    console.error('shutdown persist error:', e);
+  }
+  server.close(() => {
+    log('Server closed');
+    process.exit(0);
+  });
+};
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+// =====================
+// START
+// =====================
+server.listen(PORT, () => {
+  log(`WARFORT+ backend running on port ${PORT}`);
 });
