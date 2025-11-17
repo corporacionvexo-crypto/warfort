@@ -7,60 +7,78 @@
     body { margin:0; background:#111; overflow:hidden; }
     canvas { background:#222; display:block; margin:0 auto; }
 
+    /* ==== UI ==== */
     #ui {
         position:fixed;
         top:10px;
         left:10px;
         color:white;
         font-family:sans-serif;
-        background:rgba(0,0,0,0.55);
-        padding:10px;
-        border-radius:6px;
+        background:rgba(0,0,20,0.6);
+        padding:10px 12px;
+        border-radius:8px;
         border:1px solid #0af;
-        box-shadow:0 0 12px #0af;
+        box-shadow:0 0 15px #0af;
+        backdrop-filter: blur(4px);
     }
+
+    /* ==== MINIMAPA ==== */
     #minimap {
         position:fixed;
         right:10px;
         bottom:10px;
-        width:170px;
-        height:170px;
-        background:#000;
-        border:3px solid #08f;
+        width:180px;
+        height:180px;
+        background:radial-gradient(circle, #022 0%, #000 90%);
+        border:3px solid #0af;
         border-radius:50%;
-        box-shadow:0 0 20px #08f;
+        box-shadow:0 0 25px #0af;
     }
+
+    /* ==== ARMAS ==== */
     #weapons {
         position:fixed;
         bottom:15px;
         left:50%;
         transform:translateX(-50%);
         display:flex;
-        gap:10px;
+        gap:14px;
     }
     .weaponSlot {
         width:60px;
         height:60px;
         border:2px solid #aaa;
-        border-radius:8px;
-        background:#0008;
+        border-radius:12px;
+        background:rgba(0,0,0,0.45);
         display:flex;
         align-items:center;
         justify-content:center;
         color:white;
-        font-size:14px;
-        box-shadow:0 0 10px #000;
-        transition:0.15s;
+        font-size:20px;
+        box-shadow:0 0 12px #000;
+        transition:0.18s;
+        backdrop-filter: blur(2px);
     }
     .weaponSlot.active {
         border-color:#0f0;
-        box-shadow:0 0 12px #0f0;
-        transform:scale(1.1);
+        box-shadow:0 0 15px #0f0;
+        transform:scale(1.17);
+    }
+
+    /* Partículas extras */
+    .hitFlash {
+        animation: flash 0.2s linear;
+    }
+    @keyframes flash {
+        0% { filter:brightness(4); }
+        100% { filter:brightness(1); }
     }
 </style>
 </head>
 
 <body>
+
+<!-- ==== UI PRINCIPAL ==== -->
 <div id="ui">
     <div>
         <label>Nombre:</label>
@@ -78,12 +96,14 @@
     </div>
 </div>
 
+<!-- HUD armas -->
 <div id="weapons">
     <div class="weaponSlot active" id="weapon1">🔪</div>
     <div class="weaponSlot" id="weapon2">🏹</div>
     <div class="weaponSlot" id="weapon3">🛡️</div>
 </div>
 
+<!-- CANVAS -->
 <canvas id="game" width="900" height="600"></canvas>
 <canvas id="minimap"></canvas>
 
@@ -118,7 +138,8 @@ let player = {
     hp: 100,
     stamina: 100,
     dir: 1,
-    weapon: 1
+    weapon: 1,
+    canHit: true
 };
 
 let particles = [];
@@ -131,8 +152,10 @@ let keys = {};
 let camera = { x:0, y:0, lerpX:0, lerpY:0, width:900, height:600 };
 const WORLD = { width:3000, height:3000 };
 
+
+
 /* =========================
-        INICIAR
+       INICIAR
 ========================= */
 function startGame() {
     const name = document.getElementById("nameInput").value.trim();
@@ -165,6 +188,7 @@ function startGame() {
     loop();
 }
 
+
 /* =========================
        CONTROLES
 ========================= */
@@ -177,7 +201,7 @@ canvas.addEventListener("wheel", e => {
     document.getElementById("zoomValue").innerText = zoom.toFixed(2);
 });
 
-/* CAMBIO DE ARMA */
+/* Cambio de arma */
 document.addEventListener("keydown", e => {
     if (e.key >= "1" && e.key <= "3") {
         player.weapon = parseInt(e.key);
@@ -185,7 +209,12 @@ document.addEventListener("keydown", e => {
     }
 });
 
-/* DISPARAR ARCO */
+/* Golpe cuerpo a cuerpo */
+document.addEventListener("mousedown", () => {
+    if (player.weapon === 1) meleeAttack();
+});
+
+/* Disparar arco */
 canvas.addEventListener("click", e => {
     if (player.weapon === 2) shootArrow(e);
 });
@@ -194,6 +223,36 @@ function updateWeaponUI() {
     document.querySelectorAll(".weaponSlot").forEach(s => s.classList.remove("active"));
     document.getElementById("weapon" + player.weapon).classList.add("active");
 }
+
+
+/* =========================
+      MELEE ATTACK
+========================= */
+function meleeAttack() {
+    if (!player.canHit) return;
+
+    player.canHit = false;
+
+    const hitRange = 40;
+
+    for (let id in otherPlayers) {
+        const p = otherPlayers[id];
+
+        const dist = Math.hypot(p.x - player.x, p.y - player.y);
+        if (dist < hitRange) {
+            socket.emit("hit", { target: id });
+            flashHitEffect();
+        }
+    }
+
+    setTimeout(() => player.canHit = true, 350);
+}
+
+function flashHitEffect() {
+    canvas.classList.add("hitFlash");
+    setTimeout(() => canvas.classList.remove("hitFlash"), 200);
+}
+
 
 /* =========================
       ARROW SYSTEM
@@ -213,6 +272,8 @@ function shootArrow(e) {
         life: 90
     });
 }
+
+
 
 /* =========================
        UPDATE PLAYER
@@ -248,8 +309,9 @@ function updatePlayer() {
     if (socket) socket.emit("update", { x: player.x, y: player.y });
 }
 
+
 /* =========================
-     PARTICULAS
+        PARTICULAS
 ========================= */
 function spawnParticles() {
     particles.push({
@@ -271,6 +333,7 @@ function updateParticles() {
     }
 }
 
+
 /* =========================
        UPDATE ARROWS
 ========================= */
@@ -282,6 +345,8 @@ function updateArrows() {
         a.life--;
     }
 }
+
+
 
 /* =========================
         DIBUJO
@@ -311,9 +376,10 @@ function draw() {
     drawMinimap();
 }
 
-/* GRID */
+
+/* GRID VISUAL */
 function drawGrid() {
-    ctx.strokeStyle = "rgba(255,255,255,0.04)";
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
     for (let i = 0; i < WORLD.width; i += 50) {
         ctx.beginPath();
         ctx.moveTo(i, 0);
@@ -332,7 +398,7 @@ function drawGrid() {
 function drawArrows() {
     ctx.fillStyle = "orange";
     arrows.forEach(a => {
-        ctx.fillRect(a.x, a.y, 8, 3);
+        ctx.fillRect(a.x, a.y, 9, 3);
     });
 }
 
@@ -340,18 +406,18 @@ function drawArrows() {
 function drawPlayer() {
     ctx.fillStyle = "cyan";
     ctx.beginPath();
-    ctx.arc(player.x, player.y, 10, 0, Math.PI*2);
+    ctx.arc(player.x, player.y, 11, 0, Math.PI*2);
     ctx.fill();
 
     ctx.strokeStyle = "#fff";
     ctx.beginPath();
     ctx.moveTo(player.x, player.y);
-    ctx.lineTo(player.x + player.dir * 20, player.y);
+    ctx.lineTo(player.x + player.dir * 22, player.y);
     ctx.stroke();
 
     ctx.fillStyle = "white";
     ctx.font = "14px Arial";
-    ctx.fillText(username, player.x - 20, player.y - 18);
+    ctx.fillText(username, player.x - 22, player.y - 18);
 
     ctx.fillStyle = "red";
     ctx.fillRect(player.x - 15, player.y - 25, 30, 4);
@@ -370,16 +436,16 @@ function drawOtherPlayers() {
         ctx.fill();
 
         ctx.fillStyle = "#fff";
-        ctx.fillText(p.name ?? "Player", p.x - 20, p.y - 15);
+        ctx.fillText(p.name ?? "Jugador", p.x - 20, p.y - 15);
     }
 }
 
-/* DARKNESS */
+/* DARKNESS + ILUMINACIÓN */
 function drawDarkness(intensity) {
     ctx.fillStyle = `rgba(0,0,30,${intensity * 0.7})`;
     ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
 
-    let grad = ctx.createRadialGradient(player.x, player.y, 10, player.x, player.y, 220);
+    let grad = ctx.createRadialGradient(player.x, player.y, 10, player.x, player.y, 240);
     grad.addColorStop(0, "rgba(255,255,255,0)");
     grad.addColorStop(1, `rgba(0,0,0,${0.7 * intensity})`);
 
@@ -387,15 +453,20 @@ function drawDarkness(intensity) {
     ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
 }
 
-/* MINIMAP */
+
+/* MINIMAPA */
 function drawMinimap() {
-    mctx.fillStyle = "#000";
-    mctx.fillRect(0,0,minimap.width,minimap.height);
+    mctx.clearRect(0,0,minimap.width,minimap.height);
+
+    mctx.fillStyle = "#022";
+    mctx.beginPath();
+    mctx.arc(90, 90, 90, 0, Math.PI*2);
+    mctx.fill();
 
     let sx = minimap.width / WORLD.width;
     let sy = minimap.height / WORLD.height;
 
-    mctx.fillStyle = "cyan";
+    mctx.fillStyle = "#0ff";
     mctx.beginPath();
     mctx.arc(player.x * sx, player.y * sy, 4, 0, Math.PI*2);
     mctx.fill();
@@ -408,6 +479,7 @@ function drawMinimap() {
         mctx.fill();
     }
 }
+
 
 /* LOOP */
 function loop() {
