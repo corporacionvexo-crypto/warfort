@@ -1,495 +1,724 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<title>WARFORT+</title>
+<meta charset="UTF-8" />
+<title>WARFORT+ (Frontend WARFORT+)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
-    body { margin:0; background:#111; overflow:hidden; }
-    canvas { background:#222; display:block; margin:0 auto; }
-
-    /* ==== UI ==== */
-    #ui {
-        position:fixed;
-        top:10px;
-        left:10px;
-        color:white;
-        font-family:sans-serif;
-        background:rgba(0,0,20,0.6);
-        padding:10px 12px;
-        border-radius:8px;
-        border:1px solid #0af;
-        box-shadow:0 0 15px #0af;
-        backdrop-filter: blur(4px);
-    }
-
-    /* ==== MINIMAPA ==== */
-    #minimap {
-        position:fixed;
-        right:10px;
-        bottom:10px;
-        width:180px;
-        height:180px;
-        background:radial-gradient(circle, #022 0%, #000 90%);
-        border:3px solid #0af;
-        border-radius:50%;
-        box-shadow:0 0 25px #0af;
-    }
-
-    /* ==== ARMAS ==== */
-    #weapons {
-        position:fixed;
-        bottom:15px;
-        left:50%;
-        transform:translateX(-50%);
-        display:flex;
-        gap:14px;
-    }
-    .weaponSlot {
-        width:60px;
-        height:60px;
-        border:2px solid #aaa;
-        border-radius:12px;
-        background:rgba(0,0,0,0.45);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        color:white;
-        font-size:20px;
-        box-shadow:0 0 12px #000;
-        transition:0.18s;
-        backdrop-filter: blur(2px);
-    }
-    .weaponSlot.active {
-        border-color:#0f0;
-        box-shadow:0 0 15px #0f0;
-        transform:scale(1.17);
-    }
-
-    /* Partículas extras */
-    .hitFlash {
-        animation: flash 0.2s linear;
-    }
-    @keyframes flash {
-        0% { filter:brightness(4); }
-        100% { filter:brightness(1); }
-    }
+  body { margin:0; background:#081018; overflow:hidden; font-family: sans-serif; color:#fff;}
+  canvas { background:#0b0f14; display:block; margin:0 auto; box-shadow: 0 8px 40px rgba(0,0,0,0.6); border-radius:8px; }
+  #ui {
+    position:fixed; top:12px; left:12px; background:rgba(0,6,10,0.6); padding:12px; border-radius:10px;
+    border:1px solid rgba(10,160,255,0.12); box-shadow:0 6px 20px rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+  }
+  #ui input { padding:6px; border-radius:6px; border:1px solid #223; background:#07111a; color:#fff; }
+  #weapons { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); display:flex; gap:12px; }
+  .weaponSlot { width:62px; height:62px; display:flex; align-items:center; justify-content:center; border-radius:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.04); font-size:22px; transition:all .12s; }
+  .weaponSlot.active { transform:scale(1.12); box-shadow:0 6px 24px rgba(0,255,180,0.06); border-color: rgba(0,255,180,0.15); }
+  #minimap { position:fixed; right:12px; bottom:12px; width:170px; height:170px; border-radius:50%; border:2px solid rgba(10,200,255,0.12); background: radial-gradient(circle,#012 0%, #000 90%); box-shadow:0 12px 40px rgba(0,0,0,0.6);}
+  #hud {
+    margin-top:8px; font-size:13px; line-height:1.5;
+  }
+  #shieldIndicator { margin-top:8px; font-weight:600; color:#9be; }
+  .small { font-size:12px; color:#9aa; }
 </style>
 </head>
-
 <body>
 
-<!-- ==== UI PRINCIPAL ==== -->
 <div id="ui">
-    <div>
-        <label>Nombre:</label>
-        <input id="nameInput" placeholder="Tu nombre">
-        <button onclick="startGame()">Entrar</button>
-    </div>
-    <div id="stats" style="display:none;">
-        <p>Vida: <span id="hp">100</span></p>
-        <p>Stamina: <span id="staminaText">100</span></p>
-        <p>Madera: <span id="wood">0</span></p>
-        <p>Piedra: <span id="stone">0</span></p>
-        <p>Comida: <span id="food">0</span></p>
-        <p>Oro: <span id="gold">0</span></p>
-        <p>Zoom: <span id="zoomValue">1</span>x</p>
-    </div>
+  <div>
+    <label>Nombre:</label>
+    <input id="nameInput" placeholder="Tu nombre" />
+    <button onclick="startGame()">Entrar</button>
+  </div>
+  <div id="hud" style="display:none;">
+    Vida: <span id="hp">100</span> — Stamina: <span id="staminaText">100</span><br/>
+    Zoom: <span id="zoomValue">1</span>x
+    <div id="shieldIndicator" style="display:none;">🔷 Burbuja activa: <span id="shieldTimer">0</span>s</div>
+    <div class="small">Arma actual: <span id="currentWeapon">Espada</span> — Pulsa <strong>E</strong> para escudo (3s, cd 6s). Click = atacar (espada/arco).</div>
+  </div>
 </div>
 
-<!-- HUD armas -->
 <div id="weapons">
-    <div class="weaponSlot active" id="weapon1">🔪</div>
-    <div class="weaponSlot" id="weapon2">🏹</div>
-    <div class="weaponSlot" id="weapon3">🛡️</div>
+  <div class="weaponSlot active" id="weapon1">🔪</div>
+  <div class="weaponSlot" id="weapon2">🏹</div>
+  <div class="weaponSlot" id="weapon3">🛡️</div>
 </div>
 
-<!-- CANVAS -->
-<canvas id="game" width="900" height="600"></canvas>
+<canvas id="game" width="1000" height="660"></canvas>
 <canvas id="minimap"></canvas>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
 <script>
 /* =========================
-        CONFIG
+   CONFIG & STATE
 ========================= */
-const SERVER_URL = "https://warfort.onrender.com";
+const SERVER_URL = "https://warfort.onrender.com"; // ajusta si tu servidor está en otra URL
 let socket = null;
 
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 
-const minimap = document.getElementById("minimap");
-const mctx = minimap.getContext("2d");
+const minimap = document.getElementById('minimap');
+const mctx = minimap.getContext('2d');
 
-let username = "";
+let username = '';
 let zoom = 1;
 let time = 0;
 
-/* =========================
-       JUGADOR
-========================= */
+/* PLAYER LOCAL */
 let player = {
-    x: 400,
-    y: 300,
-    dx: 0,
-    dy: 0,
-    speed: 3,
-    hp: 100,
-    stamina: 100,
-    dir: 1,
-    weapon: 1,
-    canHit: true
+  x: 500, y: 330, dx:0, dy:0, speed:3, hp:100, stamina:100, dir:1,
+  weapon:1, // 1 sword, 2 bow, 3 shield icon (but shield is activated with E)
+  canHit:true,
+  shieldActive:false,
+  shieldCooldown:0, // ms left of cooldown
+  shieldEndTs:0
 };
+
+let otherPlayers = {}; // id -> player info from server
+let mapState = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[], loot:[] };
 
 let particles = [];
 let arrows = [];
 
-let otherPlayers = {};
-let map = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[] };
 let keys = {};
-
-let camera = { x:0, y:0, lerpX:0, lerpY:0, width:900, height:600 };
+let camera = { lerpX:0, lerpY:0, width: canvas.width, height: canvas.height };
 const WORLD = { width:3000, height:3000 };
 
+/* UI refs */
+const hpEl = document.getElementById('hp');
+const staminaEl = document.getElementById('staminaText');
+const zoomEl = document.getElementById('zoomValue');
+const shieldIndicator = document.getElementById('shieldIndicator');
+const shieldTimerEl = document.getElementById('shieldTimer');
+const currentWeaponEl = document.getElementById('currentWeapon');
 
+/* Weapon labels */
+const weaponNames = {1:'Espada',2:'Arco',3:'Escudo'};
+
+/* SETTINGS */
+const SWORD_DAMAGE = 12;
+const ARROW_DAMAGE = 15;
+const SWORD_RANGE = 60;
+const SWORD_ANGLE = Math.PI * 0.9; // wide arc
+const SWORD_COOLDOWN = 350; // ms
+const SHIELD_DURATION = 3000; // ms
+const SHIELD_COOLDOWN_MS = 6000; // ms
+const ARROW_SPEED = 10;
 
 /* =========================
-       INICIAR
+   NETWORK
 ========================= */
-function startGame() {
-    const name = document.getElementById("nameInput").value.trim();
-    if (!name) return;
+function connectSocket() {
+  socket = io(SERVER_URL, { transports:['websocket','polling'] });
 
-    username = name;
-    document.getElementById("stats").style.display = "block";
+  socket.on('connect', () => {
+    socket.emit('join', { name: username, x: player.x, y: player.y });
+  });
 
-    socket = io(SERVER_URL);
+  socket.on('init', data => {
+    if (data.map) mapState = data.map;
+    if (data.players) otherPlayers = data.players;
+    // if we have our own entry in otherPlayers, sync hp from server to local
+    if (socket && otherPlayers[socket.id]) {
+      player.hp = otherPlayers[socket.id].hp || player.hp;
+    }
+  });
 
-    socket.on("connect", () => {
-        socket.emit("join", { name: username, x: player.x, y: player.y });
-    });
-
-    socket.on("init", data => {
-        map = data.map;
-        otherPlayers = data.players;
-    });
-
-    socket.on("state", data => {
-        if (data.players) {
-            for (let id in data.players) {
-                if (data.players[id] === null) delete otherPlayers[id];
-                else otherPlayers[id] = data.players[id];
-            }
+  socket.on('state', data => {
+    if (data.map) mapState = data.map;
+    if (data.players) {
+      for (const id in data.players) {
+        if (data.players[id] === null) delete otherPlayers[id];
+        else {
+          // keep local player object separate from otherPlayers
+          if (id === socket.id) {
+            // server authoritative: update our HP if server sends it
+            player.hp = data.players[id].hp ?? player.hp;
+          } else {
+            otherPlayers[id] = data.players[id];
+          }
         }
-        if (data.map) map = data.map;
-    });
-
-    loop();
-}
-
-
-/* =========================
-       CONTROLES
-========================= */
-document.addEventListener("keydown", e => keys[e.key] = true);
-document.addEventListener("keyup",   e => keys[e.key] = false);
-
-canvas.addEventListener("wheel", e => {
-    zoom -= e.deltaY * 0.001;
-    zoom = Math.max(0.6, Math.min(2.5, zoom));
-    document.getElementById("zoomValue").innerText = zoom.toFixed(2);
-});
-
-/* Cambio de arma */
-document.addEventListener("keydown", e => {
-    if (e.key >= "1" && e.key <= "3") {
-        player.weapon = parseInt(e.key);
-        updateWeaponUI();
+      }
     }
-});
+  });
 
-/* Golpe cuerpo a cuerpo */
-document.addEventListener("mousedown", () => {
-    if (player.weapon === 1) meleeAttack();
-});
-
-/* Disparar arco */
-canvas.addEventListener("click", e => {
-    if (player.weapon === 2) shootArrow(e);
-});
-
-function updateWeaponUI() {
-    document.querySelectorAll(".weaponSlot").forEach(s => s.classList.remove("active"));
-    document.getElementById("weapon" + player.weapon).classList.add("active");
-}
-
-
-/* =========================
-      MELEE ATTACK
-========================= */
-function meleeAttack() {
-    if (!player.canHit) return;
-
-    player.canHit = false;
-
-    const hitRange = 40;
-
-    for (let id in otherPlayers) {
-        const p = otherPlayers[id];
-
-        const dist = Math.hypot(p.x - player.x, p.y - player.y);
-        if (dist < hitRange) {
-            socket.emit("hit", { target: id });
-            flashHitEffect();
-        }
+  // resultados de golpes
+  socket.on('hitResult', data => {
+    // attacker got confirmation
+    // We can play a sound / particle if attacker is local
+    if (data.attacker === socket.id) {
+      spawnHitParticleAtTarget(data.target);
     }
+  });
 
-    setTimeout(() => player.canHit = true, 350);
-}
-
-function flashHitEffect() {
-    canvas.classList.add("hitFlash");
-    setTimeout(() => canvas.classList.remove("hitFlash"), 200);
-}
-
-
-/* =========================
-      ARROW SYSTEM
-========================= */
-function shootArrow(e) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) / zoom + camera.lerpX;
-    const my = (e.clientY - rect.top) / zoom + camera.lerpY;
-
-    const ang = Math.atan2(my - player.y, mx - player.x);
-
-    arrows.push({
-        x: player.x,
-        y: player.y,
-        vx: Math.cos(ang) * 10,
-        vy: Math.sin(ang) * 10,
-        life: 90
-    });
-}
-
-
-
-/* =========================
-       UPDATE PLAYER
-========================= */
-function updatePlayer() {
-    player.dx = 0;
-    player.dy = 0;
-
-    let speed = player.speed;
-
-    if (keys["Shift"] && player.stamina > 0) {
-        speed = 5;
-        player.stamina -= 0.8;
-        spawnParticles();
-    } else {
-        player.stamina += 0.4;
+  socket.on('hitTaken', data => {
+    // data.attacker, data.hp
+    // If I'm target, update hp visually (server will also push state)
+    if (socket && socket.id === data.target) {
+      player.hp = data.hp;
     }
+  });
 
-    player.stamina = Math.max(0, Math.min(100, player.stamina));
-    document.getElementById("staminaText").innerText = player.stamina.toFixed(0);
+  socket.on('killfeed', k => {
+    console.log('KILLFEED', k);
+  });
 
-    if (keys["w"]) player.dy = -speed;
-    if (keys["s"]) player.dy = speed;
-    if (keys["a"]) player.dx = -speed, player.dir = -1;
-    if (keys["d"]) player.dx = speed, player.dir = 1;
+  socket.on('missionClaimed', m => {
+    console.log('MISSION CLAIMED', m);
+  });
 
-    player.x += player.dx;
-    player.y += player.dy;
+  socket.on('mapLoot', d => {
+    // add loot locally for immediate feedback
+    if (d.loot) mapState.loot.push(d.loot);
+  });
 
-    player.x = Math.max(0, Math.min(WORLD.width, player.x));
-    player.y = Math.max(0, Math.min(WORLD.height, player.y));
-
-    if (socket) socket.emit("update", { x: player.x, y: player.y });
+  socket.on('storm', s => {
+    // visual storm effect
+    spawnStormParticles(s.intensity);
+  });
 }
 
+/* =========================
+   INPUT
+========================= */
+document.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+
+  // Weapon selection 1-3
+  if (e.key >= '1' && e.key <= '3') {
+    player.weapon = Number(e.key);
+    updateWeaponUI();
+  }
+
+  // Shield activation on key E (hybrid option)
+  if (e.key.toLowerCase() === 'e') {
+    tryActivateShield();
+  }
+});
+
+document.addEventListener('keyup', e => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+canvas.addEventListener('mousedown', (e) => {
+  // Use click for sword or bow
+  if (player.weapon === 1) { // sword
+    performSwordAttack();
+  } else if (player.weapon === 2) { // bow
+    shootLocalArrow(e);
+  } else if (player.weapon === 3) {
+    // clicking while escudo selected does nothing by design; use E to activate
+  }
+});
+
+/* Mouse wheel zoom */
+canvas.addEventListener('wheel', e => {
+  zoom -= e.deltaY * 0.001;
+  zoom = Math.max(0.6, Math.min(2.2, zoom));
+  zoomEl.innerText = zoom.toFixed(2);
+});
+
+/* Update weapon UI text & selection highlight */
+function updateWeaponUI(){
+  currentWeaponEl.innerText = weaponNames[player.weapon] || 'Desconocida';
+  document.querySelectorAll('.weaponSlot').forEach((el, i) => {
+    el.classList.toggle('active', (i+1) === player.weapon);
+  });
+}
 
 /* =========================
-        PARTICULAS
+   SHIELD (E)
 ========================= */
-function spawnParticles() {
+function tryActivateShield(){
+  const now = Date.now();
+  if (player.shieldActive) return;
+  if (player.shieldCooldown && player.shieldCooldown > now) return;
+
+  player.shieldActive = true;
+  player.shieldEndTs = now + SHIELD_DURATION;
+  player.shieldCooldown = now + SHIELD_COOLDOWN_MS;
+
+  // notify server we activated shield (server should validate & set flag)
+  if (socket) socket.emit('update', { shield: true });
+
+  // UI
+  shieldIndicator.style.display = 'block';
+  updateShieldUI();
+
+  // schedule deactivation
+  setTimeout(() => {
+    player.shieldActive = false;
+    shieldIndicator.style.display = 'none';
+    if (socket) socket.emit('update', { shield: false });
+  }, SHIELD_DURATION);
+}
+
+/* Update shield UI timer (called every frame) */
+function updateShieldUI(){
+  if (!player.shieldActive) return;
+  const remain = Math.max(0, Math.ceil((player.shieldEndTs - Date.now()) / 1000));
+  shieldTimerEl.innerText = remain;
+}
+
+/* =========================
+   ATTACKS
+========================= */
+
+function performSwordAttack(){
+  if (!player.canHit) return;
+  player.canHit = false;
+  // swing animation params
+  const swing = { start: performance.now(), dur: 180 };
+
+  // local visual: spawn arc particles around player
+  spawnSwordSwingParticles();
+
+  // check collisions with other players (local prediction) and emit hit for each that matches
+  for (const id in otherPlayers) {
+    const p = otherPlayers[id];
+    if (!p) continue;
+    const dx = p.x - player.x;
+    const dy = p.y - player.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > SWORD_RANGE) continue;
+
+    // check angle of target relative to facing
+    const angToTarget = Math.atan2(dy, dx);
+    const facingAngle = (player.dir === 1) ? 0 : Math.PI; // simple left/right facing
+    // compute difference, normalize
+    let diff = Math.abs(((angToTarget - facingAngle + Math.PI) % (2*Math.PI)) - Math.PI);
+    if (diff <= SWORD_ANGLE/2) {
+      // target in arc -> emit hit
+      if (socket) socket.emit('hit', { target: id, dmg: SWORD_DAMAGE, type: 'melee' });
+    }
+  }
+
+  // cooldown
+  setTimeout(() => player.canHit = true, SWORD_COOLDOWN);
+}
+
+/* Spawn small particles for visual sword swing */
+function spawnSwordSwingParticles(){
+  for (let i=0;i<12;i++){
     particles.push({
-        x: player.x,
-        y: player.y + 10,
-        size: 4,
-        alpha: 1,
-        vx: (Math.random() - 0.5) * 1,
-        vy: 1 + Math.random()
+      x: player.x + (Math.random()-0.5) * 20,
+      y: player.y + (Math.random()-0.5) * 20,
+      vx: (Math.random()-0.5) * 2,
+      vy: (Math.random()-0.5) * 2,
+      size: 2 + Math.random()*3,
+      alpha: 1,
+      life: 40
     });
+  }
 }
 
-function updateParticles() {
-    particles = particles.filter(p => p.alpha > 0.05);
-    for (let p of particles) {
-        p.x += p.vx;
-        p.y += p.vy;
-        p.alpha -= 0.03;
+/* LOCAL ARROW SHOOTING (visual + net) */
+function shootLocalArrow(e){
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) / zoom + camera.lerpX;
+  const my = (e.clientY - rect.top) / zoom + camera.lerpY;
+  const ang = Math.atan2(my - player.y, mx - player.x);
+
+  arrows.push({
+    id: 'a_' + Date.now() + '_' + Math.floor(Math.random()*1000),
+    x: player.x + Math.cos(ang) * 18,
+    y: player.y + Math.sin(ang) * 18,
+    vx: Math.cos(ang) * ARROW_SPEED,
+    vy: Math.sin(ang) * ARROW_SPEED,
+    life: 180,
+    owner: socket ? socket.id : 'local'
+  });
+
+  // optionally play sound / animation
+}
+
+/* When arrow hits target locally, we emit a 'hit' (server validates) */
+function handleArrowCollisions(){
+  for (let i = arrows.length-1; i>=0; i--){
+    const a = arrows[i];
+    // check collision with otherPlayers
+    for (const id in otherPlayers){
+      if (id === a.owner) continue; // don't hit owner
+      const p = otherPlayers[id];
+      if (!p) continue;
+      const dx = p.x - a.x;
+      const dy = p.y - a.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 12) { // hit radius
+        // emit hit
+        if (socket) socket.emit('hit', { target: id, dmg: ARROW_DAMAGE, type: 'arrow' });
+        // remove arrow
+        arrows.splice(i,1);
+        spawnHitParticleAtTarget(id);
+        break;
+      }
     }
+  }
 }
 
+/* spawn visual when attacker hits target */
+function spawnHitParticleAtTarget(targetId){
+  const p = otherPlayers[targetId];
+  if (!p) return;
+  for (let i=0;i<18;i++){
+    particles.push({
+      x: p.x + (Math.random()-0.5)*12,
+      y: p.y + (Math.random()-0.5)*12,
+      vx: (Math.random()-0.5)*2,
+      vy: (Math.random()-0.5)*2,
+      size: 2 + Math.random()*3,
+      alpha: 1,
+      life: 40
+    });
+  }
+}
 
 /* =========================
-       UPDATE ARROWS
+   PARTICLES & ARROWS UPDATE
 ========================= */
-function updateArrows() {
-    arrows = arrows.filter(a => a.life > 0);
-    for (let a of arrows) {
-        a.x += a.vx;
-        a.y += a.vy;
-        a.life--;
-    }
+function updateParticles(){
+  for (let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.alpha -= 0.02;
+    p.life--;
+    if (p.alpha <= 0 || p.life <= 0) particles.splice(i,1);
+  }
 }
 
+function updateArrows(){
+  for (let i=arrows.length-1;i>=0;i--){
+    const a = arrows[i];
+    a.x += a.vx;
+    a.y += a.vy;
+    a.life--;
+    // remove if out of world
+    if (a.life <= 0 || a.x < 0 || a.y < 0 || a.x > WORLD.width || a.y > WORLD.height) {
+      arrows.splice(i,1);
+      continue;
+    }
+  }
 
+  // handle collisions
+  handleArrowCollisions();
+}
+
+/* Storm visual spawns */
+function spawnStormParticles(intensity){
+  for (let i=0;i<intensity*8;i++){
+    particles.push({
+      x: Math.random()*WORLD.width,
+      y: Math.random()*WORLD.height,
+      vx: (Math.random()-0.5)*0.1,
+      vy: (Math.random()-0.2)*0.3,
+      size: 1 + Math.random()*3,
+      alpha: 0.6,
+      life: 200
+    });
+  }
+}
 
 /* =========================
-        DIBUJO
+   PLAYER MOVEMENT & UPDATE
 ========================= */
-function draw() {
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+function updatePlayer(){
+  player.dx = 0; player.dy = 0;
+  let sp = player.speed;
+  if (keys['shift'] && player.stamina > 0){
+    sp = player.speed + 2;
+    player.stamina = Math.max(0, player.stamina - 0.8);
+    // spawn running particles
+    if (Math.random() < 0.6) {
+      particles.push({ x: player.x + (Math.random()-0.5)*8, y: player.y+14, vx:(Math.random()-0.5)*1.2, vy:1.5, size:2, alpha:0.8, life:40 });
+    }
+  } else {
+    player.stamina = Math.min(100, player.stamina + 0.35);
+  }
 
-    time += 0.002;
-    let night = (Math.sin(time) + 1) / 2;
+  if (keys['w'] || keys['arrowup']) player.dy = -sp;
+  if (keys['s'] || keys['arrowdown']) player.dy = sp;
+  if (keys['a'] || keys['arrowleft']) { player.dx = -sp; player.dir = -1; }
+  if (keys['d'] || keys['arrowright']) { player.dx = sp; player.dir = 1; }
 
-    camera.lerpX += (player.x - camera.lerpX - camera.width/2/zoom) * 0.1;
-    camera.lerpY += (player.y - camera.lerpY - camera.height/2/zoom) * 0.1;
+  player.x += player.dx;
+  player.y += player.dy;
+  player.x = Math.max(0, Math.min(WORLD.width, player.x));
+  player.y = Math.max(0, Math.min(WORLD.height, player.y));
 
+  // Camera lerp
+  camera.lerpX += (player.x - camera.lerpX - camera.width/2/zoom) * 0.12;
+  camera.lerpY += (player.y - camera.lerpY - camera.height/2/zoom) * 0.12;
+
+  // Sync position to server periodically (or every frame - backend de-duplicates)
+  if (socket && socket.connected) {
+    socket.emit('update', { x: player.x, y: player.y, hp: player.hp, shield: player.shieldActive });
+  }
+
+  // shield cooldown UI
+  if (player.shieldCooldown) {
+    const now = Date.now();
+    if (player.shieldCooldown > now) {
+      const left = Math.ceil((player.shieldCooldown - now) / 1000);
+      // optionally show remaining cd in UI (not implemented visually aside from disabling)
+    } else {
+      // cd passed
+      player.shieldCooldown = 0;
+    }
+  }
+}
+
+/* =========================
+   DRAW
+========================= */
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  time += 0.01;
+  const night = (Math.sin(time) + 1) / 2;
+
+  ctx.save();
+  ctx.scale(zoom, zoom);
+  ctx.translate(-camera.lerpX, -camera.lerpY);
+
+  // background grid
+  drawGrid();
+
+  // draw loot/trees minimal
+  drawMapObjects();
+
+  // other players
+  drawOtherPlayers();
+
+  // arrows
+  drawArrows();
+
+  // local player
+  drawLocalPlayer();
+
+  // particles
+  drawParticles();
+
+  // darkness / light
+  drawDarkness(night);
+
+  ctx.restore();
+
+  // minimap
+  drawMinimap();
+}
+
+/* grid */
+function drawGrid(){
+  ctx.strokeStyle = "rgba(255,255,255,0.02)";
+  for (let i=0;i<WORLD.width;i+=50){
+    ctx.beginPath();
+    ctx.moveTo(i,0); ctx.lineTo(i,WORLD.height); ctx.stroke();
+  }
+  for (let j=0;j<WORLD.height;j+=50){
+    ctx.beginPath();
+    ctx.moveTo(0,j); ctx.lineTo(WORLD.width,j); ctx.stroke();
+  }
+}
+
+/* map objects */
+function drawMapObjects(){
+  // draw loot
+  if (mapState.loot) {
+    ctx.fillStyle = '#c2a45a';
+    for (const l of mapState.loot) {
+      ctx.beginPath(); ctx.rect(l.x-6, l.y-6, 12, 12); ctx.fill();
+    }
+  }
+}
+
+/* draw other players */
+function drawOtherPlayers(){
+  for (const id in otherPlayers){
+    const p = otherPlayers[id];
+    if (!p) continue;
+    // body
+    ctx.fillStyle = '#ffcf66';
+    ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI*2); ctx.fill();
+
+    // name
+    ctx.fillStyle = '#fff'; ctx.font = '12px Arial'; ctx.fillText(p.name ?? 'Player', p.x-18, p.y-16);
+
+    // hp bar
+    ctx.fillStyle = '#333'; ctx.fillRect(p.x-16, p.y-26, 32, 5);
+    ctx.fillStyle = '#0f0'; ctx.fillRect(p.x-16, p.y-26, Math.max(0, (p.hp||100) * 0.32), 5);
+  }
+}
+
+/* draw arrows */
+function drawArrows(){
+  ctx.fillStyle = 'orange';
+  for (const a of arrows){
     ctx.save();
-    ctx.scale(zoom, zoom);
-    ctx.translate(-camera.lerpX, -camera.lerpY);
-
-    drawGrid();
-    drawParticles();
-    drawArrows();
-    drawPlayer();
-    drawOtherPlayers();
-    drawDarkness(night);
-
+    ctx.translate(a.x, a.y);
+    const angle = Math.atan2(a.vy, a.vx);
+    ctx.rotate(angle);
+    ctx.fillRect(-6, -1.5, 12, 3);
     ctx.restore();
-
-    drawMinimap();
+  }
 }
 
+/* draw local player (with shield/bubble/weapon visuals) */
+function drawLocalPlayer(){
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath(); ctx.ellipse(player.x, player.y+16, 18, 8, 0, 0, Math.PI*2); ctx.fill();
 
-/* GRID VISUAL */
-function drawGrid() {
-    ctx.strokeStyle = "rgba(255,255,255,0.05)";
-    for (let i = 0; i < WORLD.width; i += 50) {
-        ctx.beginPath();
-        ctx.moveTo(i, 0);
-        ctx.lineTo(i, WORLD.height);
-        ctx.stroke();
-    }
-    for (let j = 0; j < WORLD.height; j += 50) {
-        ctx.beginPath();
-        ctx.moveTo(0, j);
-        ctx.lineTo(WORLD.width, j);
-        ctx.stroke();
-    }
-}
+  // player circle
+  ctx.fillStyle = '#4fe8d4';
+  ctx.beginPath(); ctx.arc(player.x, player.y, 12, 0, Math.PI*2); ctx.fill();
 
-/* ARROWS */
-function drawArrows() {
-    ctx.fillStyle = "orange";
-    arrows.forEach(a => {
-        ctx.fillRect(a.x, a.y, 9, 3);
-    });
-}
+  // facing indicator (weapon)
+  ctx.strokeStyle = '#fff';
+  ctx.beginPath(); ctx.moveTo(player.x, player.y); ctx.lineTo(player.x + player.dir * 20, player.y); ctx.stroke();
 
-/* PLAYER */
-function drawPlayer() {
-    ctx.fillStyle = "cyan";
+  // name
+  ctx.fillStyle = '#fff'; ctx.font = '14px Arial'; ctx.fillText(username || 'You', player.x - 22, player.y - 18);
+
+  // HP bar
+  ctx.fillStyle = '#333'; ctx.fillRect(player.x-18, player.y-28, 36, 6);
+  ctx.fillStyle = '#f33'; ctx.fillRect(player.x-18, player.y-28, Math.max(0, player.hp*0.36), 6);
+
+  // draw shield bubble if active
+  if (player.shieldActive) {
+    const alpha = 0.28;
+    ctx.fillStyle = `rgba(90,160,255,${alpha})`;
+    ctx.beginPath(); ctx.arc(player.x, player.y, 44, 0, Math.PI*2); ctx.fill();
+    // small border
+    ctx.strokeStyle = 'rgba(150,200,255,0.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(player.x, player.y, 44, 0, Math.PI*2); ctx.stroke();
+  }
+
+  // draw weapon visual (sword or bow) at player's hand
+  if (player.weapon === 1) {
+    // sword: a rotating arc when clicked (we spawn particles instead of sprite)
+    ctx.fillStyle = '#fff';
     ctx.beginPath();
-    ctx.arc(player.x, player.y, 11, 0, Math.PI*2);
+    ctx.rect(player.x + player.dir*18, player.y-3, 18, 6);
     ctx.fill();
-
-    ctx.strokeStyle = "#fff";
+  } else if (player.weapon === 2) {
+    // bow
+    ctx.strokeStyle = '#c76';
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(player.x, player.y);
-    ctx.lineTo(player.x + player.dir * 22, player.y);
+    ctx.moveTo(player.x + player.dir*12, player.y - 10);
+    ctx.quadraticCurveTo(player.x + player.dir*28, player.y, player.x + player.dir*12, player.y + 10);
     ctx.stroke();
-
-    ctx.fillStyle = "white";
-    ctx.font = "14px Arial";
-    ctx.fillText(username, player.x - 22, player.y - 18);
-
-    ctx.fillStyle = "red";
-    ctx.fillRect(player.x - 15, player.y - 25, 30, 4);
-    ctx.fillStyle = "lime";
-    ctx.fillRect(player.x - 15, player.y - 25, player.hp * 0.3, 4);
+  } else {
+    // shield selected - show a small shield icon next to player
+    ctx.fillStyle = '#8ac';
+    ctx.beginPath();
+    ctx.moveTo(player.x + player.dir*18, player.y - 8);
+    ctx.lineTo(player.x + player.dir*26, player.y);
+    ctx.lineTo(player.x + player.dir*18, player.y + 8);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
-/* OTHER PLAYERS */
-function drawOtherPlayers() {
-    for (let id in otherPlayers) {
-        const p = otherPlayers[id];
-
-        ctx.fillStyle = "#ff0";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 10, 0, Math.PI*2);
-        ctx.fill();
-
-        ctx.fillStyle = "#fff";
-        ctx.fillText(p.name ?? "Jugador", p.x - 20, p.y - 15);
-    }
+/* draw particles */
+function drawParticles(){
+  for (const p of particles){
+    ctx.globalAlpha = p.alpha;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
 }
 
-/* DARKNESS + ILUMINACIÓN */
-function drawDarkness(intensity) {
-    ctx.fillStyle = `rgba(0,0,30,${intensity * 0.7})`;
-    ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
-
-    let grad = ctx.createRadialGradient(player.x, player.y, 10, player.x, player.y, 240);
-    grad.addColorStop(0, "rgba(255,255,255,0)");
-    grad.addColorStop(1, `rgba(0,0,0,${0.7 * intensity})`);
-
-    ctx.fillStyle = grad;
-    ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
+/* darkness/light */
+function drawDarkness(intensity){
+  // soft vignette around player
+  const grd = ctx.createRadialGradient(player.x, player.y, 100, player.x, player.y, 800);
+  grd.addColorStop(0, 'rgba(0,0,0,0)');
+  grd.addColorStop(1, `rgba(0,0,8,${0.7 * intensity})`);
+  ctx.fillStyle = grd;
+  ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
 }
 
+/* minimap */
+function drawMinimap(){
+  mctx.clearRect(0,0,minimap.width,minimap.height);
+  mctx.fillStyle = '#012';
+  mctx.beginPath(); mctx.arc(minimap.width/2, minimap.height/2, minimap.width/2, 0, Math.PI*2); mctx.fill();
 
-/* MINIMAPA */
-function drawMinimap() {
-    mctx.clearRect(0,0,minimap.width,minimap.height);
+  const sx = minimap.width / WORLD.width;
+  const sy = minimap.height / WORLD.height;
 
-    mctx.fillStyle = "#022";
-    mctx.beginPath();
-    mctx.arc(90, 90, 90, 0, Math.PI*2);
-    mctx.fill();
+  // player
+  mctx.fillStyle = '#0ff';
+  mctx.beginPath(); mctx.arc(player.x * sx, player.y * sy, 4, 0, Math.PI*2); mctx.fill();
 
-    let sx = minimap.width / WORLD.width;
-    let sy = minimap.height / WORLD.height;
-
-    mctx.fillStyle = "#0ff";
-    mctx.beginPath();
-    mctx.arc(player.x * sx, player.y * sy, 4, 0, Math.PI*2);
-    mctx.fill();
-
-    mctx.fillStyle = "yellow";
-    for (let id in otherPlayers) {
-        let p = otherPlayers[id];
-        mctx.beginPath();
-        mctx.arc(p.x * sx, p.y * sy, 3, 0, Math.PI*2);
-        mctx.fill();
-    }
+  // others
+  mctx.fillStyle = '#ff0';
+  for (const id in otherPlayers){
+    const p = otherPlayers[id];
+    mctx.beginPath(); mctx.arc(p.x * sx, p.y * sy, 3, 0, Math.PI*2); mctx.fill();
+  }
 }
 
+/* =========================
+   LOOP
+========================= */
+function loop(){
+  updatePlayer();
+  updateParticles();
+  updateArrows();
+  draw();
+  // update UI
+  hpEl.innerText = Math.max(0, Math.floor(player.hp));
+  staminaEl.innerText = Math.floor(player.stamina);
+  if (player.shieldActive) updateShieldUI();
 
-/* LOOP */
-function loop() {
-    updatePlayer();
-    updateParticles();
-    updateArrows();
-    draw();
-    requestAnimationFrame(loop);
+  requestAnimationFrame(loop);
 }
+
+/* =========================
+   Start game / connect
+========================= */
+function startGame(){
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) return;
+  username = name;
+  document.getElementById('hud').style.display = 'block';
+  updateWeaponUI();
+  connectSocket();
+  loop();
+}
+
+/* =========================
+  Init canvas sizes & events
+========================= */
+function resizeCanvases(){
+  // keep canvas at fixed internal size but scale visually if needed
+  const scale = Math.min(window.innerWidth / 1100, window.innerHeight / 740, 1);
+  canvas.style.width = (canvas.width * scale) + 'px';
+  canvas.style.height = (canvas.height * scale) + 'px';
+  minimap.width = 170; minimap.height = 170;
+}
+window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
+
+/* =========================
+  Boot helpers (keyboard weapon UI)
+========================= */
+document.querySelectorAll('.weaponSlot').forEach((el, i) => {
+  el.addEventListener('click', () => {
+    player.weapon = i+1;
+    updateWeaponUI();
+  });
+});
+
+/* =========================
+  Start (no auto connect)
+========================= */
+updateWeaponUI();
 </script>
-
 </body>
 </html>
