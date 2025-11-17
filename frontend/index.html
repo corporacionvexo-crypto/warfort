@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>WARFORT</title>
+<title>WARFORT+</title>
 <style>
     body { margin:0; background:#111; overflow:hidden; }
     canvas { background:#222; display:block; margin:0 auto; }
@@ -16,8 +16,21 @@
         padding:10px;
         border-radius:5px;
     }
-    input { padding:5px; }
-    button { padding:5px; margin-top:5px; }
+    #minimap {
+        position:fixed;
+        right:10px;
+        bottom:10px;
+        width:150px;
+        height:150px;
+        background:#000;
+        border:2px solid #555;
+        animation:borderPulse 3s infinite;
+    }
+    @keyframes borderPulse {
+        0% { border-color:#444; }
+        50% { border-color:#08f; }
+        100% { border-color:#444; }
+    }
 </style>
 </head>
 
@@ -30,72 +43,72 @@
     </div>
     <div id="stats" style="display:none;">
         <p>Vida: <span id="hp">100</span></p>
+        <p>Stamina: <span id="staminaText">100</span></p>
         <p>Madera: <span id="wood">0</span></p>
         <p>Piedra: <span id="stone">0</span></p>
         <p>Comida: <span id="food">0</span></p>
         <p>Oro: <span id="gold">0</span></p>
+        <p>Zoom: <span id="zoomValue">1</span>x</p>
     </div>
 </div>
 
 <canvas id="game" width="900" height="600"></canvas>
+<canvas id="minimap"></canvas>
 
-<!-- Socket.IO -->
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
 <script>
-/* ===============================
-        CONFIGURACIÓN SOCKET.IO
-   =============================== */
-
+/* =========================
+        CONFIG
+========================= */
 const SERVER_URL = "https://warfort.onrender.com"; 
-
 let socket = null;
-
-/* ===============================
-           VARIABLES DEL JUEGO
-   =============================== */
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
+const minimap = document.getElementById("minimap");
+const mctx = minimap.getContext("2d");
+
 let username = "";
+let zoom = 1;
+
+let time = 0; // día/noche
+
+/* =========================
+       JUGADOR
+========================= */
 let player = {
     x: 400,
     y: 300,
+    dx: 0,
+    dy: 0,
     speed: 3,
     hp: 100,
-    wood: 0,
-    stone: 0,
-    food: 0,
-    gold: 0,
-    fort: null
+    stamina: 100,
+    dir: 1
 };
+
+let particles = [];
 
 let otherPlayers = {};
 let map = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[] };
-
 let keys = {};
 
-// CÁMARA Y MUNDO GRANDE
-let camera = { x: 0, y: 0, width: 900, height: 600 };
-const WORLD = { width: 2000, height: 2000 };
+let camera = { x:0, y:0, lerpX:0, lerpY:0, width:900, height:600 };
+const WORLD = { width:2000, height:2000 };
 
-/* ===============================
-            INICIAR EL JUEGO
-   =============================== */
-
+/* =========================
+        INICIAR
+========================= */
 function startGame() {
     const name = document.getElementById("nameInput").value.trim();
-    if (!name) return alert("Escribe un nombre para entrar.");
+    if (!name) return;
 
     username = name;
-
     document.getElementById("stats").style.display = "block";
 
-    socket = io(SERVER_URL, {
-        transports: ["websocket", "polling"],
-        reconnection: true
-    });
+    socket = io(SERVER_URL);
 
     socket.on("connect", () => {
         socket.emit("join", { name: username, x: player.x, y: player.y });
@@ -119,75 +132,200 @@ function startGame() {
     loop();
 }
 
-/* ===============================
-             MOVIMIENTO
-   =============================== */
-
+/* =========================
+       CONTROLES
+========================= */
 document.addEventListener("keydown", e => keys[e.key] = true);
 document.addEventListener("keyup",   e => keys[e.key] = false);
 
+canvas.addEventListener("wheel", e => {
+    zoom -= e.deltaY * 0.001;
+    zoom = Math.max(0.6, Math.min(2.5, zoom));
+    document.getElementById("zoomValue").innerText = zoom.toFixed(2);
+});
+
+/* =========================
+        ACTUALIZAR
+========================= */
 function updatePlayer() {
-    if (keys["w"]) player.y -= player.speed;
-    if (keys["s"]) player.y += player.speed;
-    if (keys["a"]) player.x -= player.speed;
-    if (keys["d"]) player.x += player.speed;
+    player.dx = 0;
+    player.dy = 0;
+
+    let speed = player.speed;
+
+    if (keys["Shift"] && player.stamina > 0) {
+        speed = 5;
+        player.stamina -= 0.8;
+        spawnParticles();
+    } else {
+        player.stamina += 0.4;
+    }
+
+    player.stamina = Math.max(0, Math.min(100, player.stamina));
+    document.getElementById("staminaText").innerText = player.stamina.toFixed(0);
+
+    if (keys["w"]) player.dy = -speed;
+    if (keys["s"]) player.dy = speed;
+    if (keys["a"]) player.dx = -speed, player.dir = -1;
+    if (keys["d"]) player.dx = speed, player.dir = 1;
+
+    player.x += player.dx;
+    player.y += player.dy;
+
+    player.x = Math.max(0, Math.min(WORLD.width, player.x));
+    player.y = Math.max(0, Math.min(WORLD.height, player.y));
 
     if (socket) socket.emit("update", { x: player.x, y: player.y });
 }
 
-/* ===============================
-         DIBUJAR JUEGO (MEJORADO)
-   =============================== */
+/* =========================
+     PARTÍCULAS
+========================= */
+function spawnParticles() {
+    particles.push({
+        x: player.x,
+        y: player.y + 10,
+        size: 4,
+        alpha: 1,
+        vx: (Math.random() - 0.5) * 1,
+        vy: 1 + Math.random()
+    });
+}
 
-function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // --- ACTUALIZAR CÁMARA ---
-    camera.x = player.x - camera.width / 2;
-    camera.y = player.y - camera.height / 2;
-
-    if (camera.x < 0) camera.x = 0;
-    if (camera.y < 0) camera.y = 0;
-    if (camera.x > WORLD.width - camera.width) camera.x = WORLD.width - camera.width;
-    if (camera.y > WORLD.height - camera.height) camera.y = WORLD.height - camera.height;
-
-    // --- CUADRICULA ---
-    ctx.strokeStyle = "rgba(255,255,255,0.05)";
-    for (let i = 0; i < WORLD.width; i += 50) {
-        ctx.beginPath();
-        ctx.moveTo(i - camera.x, 0 - camera.y);
-        ctx.lineTo(i - camera.x, WORLD.height - camera.y);
-        ctx.stroke();
-    }
-    for (let i = 0; i < WORLD.height; i += 50) {
-        ctx.beginPath();
-        ctx.moveTo(0 - camera.x, i - camera.y);
-        ctx.lineTo(WORLD.width - camera.x, i - camera.y);
-        ctx.stroke();
-    }
-
-    // --- JUGADOR LOCAL ---
-    ctx.fillStyle = "cyan";
-    ctx.beginPath();
-    ctx.arc(player.x - camera.x, player.y - camera.y, 10, 0, Math.PI * 2);
-    ctx.fill();
-
-    // --- OTROS JUGADORES ---
-    ctx.fillStyle = "yellow";
-    for (let id in otherPlayers) {
-        const p = otherPlayers[id];
-        ctx.beginPath();
-        ctx.arc(p.x - camera.x, p.y - camera.y, 10, 0, Math.PI * 2);
-        ctx.fill();
+function updateParticles() {
+    particles = particles.filter(p => p.alpha > 0.05);
+    for (let p of particles) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= 0.03;
     }
 }
 
-/* ===============================
-               LOOP
-   =============================== */
+/* =========================
+        DIBUJO
+========================= */
+function draw() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
 
+    time += 0.002;
+    let night = (Math.sin(time) + 1) / 2; // 0 = día / 1 = noche
+
+    camera.lerpX += (player.x - camera.lerpX - camera.width/2/zoom) * 0.1;
+    camera.lerpY += (player.y - camera.lerpY - camera.height/2/zoom) * 0.1;
+
+    ctx.save();
+    ctx.scale(zoom, zoom);
+    ctx.translate(-camera.lerpX, -camera.lerpY);
+
+    drawGrid();
+    drawParticles();
+    drawPlayer();
+    drawOtherPlayers();
+
+    drawDarkness(night);
+
+    ctx.restore();
+
+    drawMinimap();
+}
+
+/* CUADRÍCULA */
+function drawGrid() {
+    ctx.strokeStyle = "rgba(255,255,255,0.04)";
+    for (let i = 0; i < WORLD.width; i += 50) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i, WORLD.height);
+        ctx.stroke();
+    }
+    for (let j = 0; j < WORLD.height; j += 50) {
+        ctx.beginPath();
+        ctx.moveTo(0, j);
+        ctx.lineTo(WORLD.width, j);
+        ctx.stroke();
+    }
+}
+
+/* PARTÍCULAS */
+function drawParticles() {
+    for (let p of particles) {
+        ctx.fillStyle = `rgba(255,255,255,${p.alpha})`;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+    }
+}
+
+/* JUGADOR */
+function drawPlayer() {
+    ctx.fillStyle = "cyan";
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 10, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "white";
+    ctx.font = "14px Arial";
+    ctx.fillText(username, player.x - 20, player.y - 18);
+
+    ctx.fillStyle = "red";
+    ctx.fillRect(player.x - 15, player.y - 25, 30, 4);
+    ctx.fillStyle = "lime";
+    ctx.fillRect(player.x - 15, player.y - 25, player.hp * 0.3, 4);
+
+    ctx.fillStyle = "yellow";
+    ctx.fillRect(player.x - 15, player.y - 19, 30, 3);
+    ctx.fillStyle = "orange";
+    ctx.fillRect(player.x - 15, player.y - 19, player.stamina * 0.3, 3);
+}
+
+/* OTROS JUGADORES */
+function drawOtherPlayers() {
+    for (let id in otherPlayers) {
+        const p = otherPlayers[id];
+
+        ctx.fillStyle = "yellow";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "white";
+        ctx.fillText(p.name ?? "Player", p.x - 20, p.y - 15);
+    }
+}
+
+/* OSCURIDAD DÍA / NOCHE */
+function drawDarkness(intensity) {
+    ctx.fillStyle = `rgba(0,0,30,${intensity * 0.7})`;
+    ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
+
+    let grad = ctx.createRadialGradient(player.x, player.y, 10, player.x, player.y, 200);
+    grad.addColorStop(0, "rgba(255,255,255,0)");
+    grad.addColorStop(1, `rgba(0,0,0,${0.7 * intensity})`);
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(camera.lerpX, camera.lerpY, WORLD.width, WORLD.height);
+}
+
+/* MINIMAPA */
+function drawMinimap() {
+    mctx.fillStyle = "#000";
+    mctx.fillRect(0,0,minimap.width,minimap.height);
+
+    let sx = minimap.width / WORLD.width;
+    let sy = minimap.height / WORLD.height;
+
+    mctx.fillStyle = "cyan";
+    mctx.fillRect(player.x * sx - 2, player.y * sy - 2, 4, 4);
+
+    mctx.fillStyle = "yellow";
+    for (let id in otherPlayers) {
+        let p = otherPlayers[id];
+        mctx.fillRect(p.x * sx - 2, p.y * sy - 2, 4, 4);
+    }
+}
+
+/* LOOP */
 function loop() {
     updatePlayer();
+    updateParticles();
     draw();
     requestAnimationFrame(loop);
 }
