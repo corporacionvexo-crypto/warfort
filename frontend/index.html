@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>WARFORT</title>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Socket.io cliente -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body style="background:#111; color:white; font-family:sans-serif;">
+
+<div id="root"></div>
+
+<script type="text/babel">
+
+function App() {
+  const [username, setUsername] = React.useState("");
+  const [socket, setSocket] = React.useState(null);
+  const [connected, setConnected] = React.useState(false);
+
+  // CONECTAR AL SERVIDOR DE RAILWAY
+  const SERVER_URL = "https://TU-SERVIDOR.onrailway.app"; // ← CAMBIA ESTO
+
+  const connectGame = () => {
+    const s = io(SERVER_URL);
+
+    s.on("connect", () => {
+      console.log("Conectado a WARFORT backend");
+      setConnected(true);
+      s.emit("join", {
+        name: username,
+        x: Math.random() * 200,
+        y: Math.random() * 200
+      });
+    });
+
+    setSocket(s);
+  };
+
+  if (!connected) {
+    return (
+      <div style={{ padding: 30 }}>
+        <h1>WARFORT</h1>
+        <input
+          style={{ padding: 10, width: 200 }}
+          placeholder="Nombre de usuario"
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <button style={{ padding: 10, marginLeft: 10 }} onClick={connectGame}>
+          Entrar
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 20 }}>
+      <h2>Bienvenido a WARFORT, {username}</h2>
+      <p>El juego ya está conectado al servidor.</p>
+      <p>Ahora pega aquí tu lógica del mapa, render, colisiones, crafting, etc.</p>
+    </div>
+  );
+}
+
+ReactDOM.render(<App />, document.getElementById("root"));
+
+</script>
+
+</body>
+</html>
