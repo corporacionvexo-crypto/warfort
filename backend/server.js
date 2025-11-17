@@ -1,5 +1,5 @@
 // server.js
-// WARFORT+ Backend - FULL OPTIMIZADA WARFORT+
+// WARFORT+ Backend - CORREGIDO & MEJORADO
 // Ready to copy & paste
 //
 // Dependencias:
@@ -24,11 +24,12 @@ const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'warfort.db');
 const IO_PING_INTERVAL = 2000;
 const IO_PING_TIMEOUT = 4000;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*'; // puede restringir en producción
 
 // MIDDLEWARE
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: CORS_ORIGIN }));
 
 // LOGGING BÁSICO
 const log = (...args) => console.log('[WARFORT]', ...args);
@@ -38,7 +39,7 @@ process.on('unhandledRejection', e => console.error('[UNHANDLED_REJ]', e));
 // SOCKET.IO
 const { Server } = require('socket.io');
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] },
+  cors: { origin: CORS_ORIGIN, methods: ['GET', 'POST'] },
   pingInterval: IO_PING_INTERVAL,
   pingTimeout: IO_PING_TIMEOUT
 });
@@ -156,8 +157,15 @@ const all = (sql, params = []) => new Promise((res, rej) =>
 // =====================
 // IN-MEMORY STATE
 // =====================
+// mapState: estado global del mapa
 let mapState = { trees: [], bushes: [], stones: [], animals: [], wheels: [], forts: [], loot: [] };
-let players = {}; // socketId -> player object
+
+// playersById: playerId -> player object (persisted shape)
+// playerSocketMap: playerId -> socketId (si está online)
+// socketPlayerMap: socketId -> playerId (reverse)
+const playersById = {};
+const playerSocketMap = {};
+const socketPlayerMap = {};
 
 (async () => {
   try {
@@ -172,7 +180,7 @@ let players = {}; // socketId -> player object
 // =====================
 // UTILIDADES
 // =====================
-const safe = (obj, keys) => keys.every(k => obj && obj[k] !== undefined);
+const safe = (obj, keys) => keys.every(k => obj && obj[k] !== undefined && obj[k] !== null);
 const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 const persistMapState = async () => {
@@ -185,31 +193,62 @@ const persistMapState = async () => {
 
 const upsertPlayerDB = async (p) => {
   try {
+    if (!p || !p.id) throw new Error('player id required for upsert');
     await run(
       `INSERT INTO players (id,name,role,x,y,hp,kills,fort,inventory_json,last_login)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name=excluded.name, role=excluded.role, x=excluded.x, y=excluded.y, hp=excluded.hp,
          kills=excluded.kills, fort=excluded.fort, inventory_json=excluded.inventory_json, last_login=excluded.last_login`,
-      [p.id, p.name, p.role || 'player', p.x || 0, p.y || 0, p.hp || 100, p.kills || 0, p.fort || null, JSON.stringify(p.inventory || {}), Date.now()]
+      [p.id, p.name || `Player-${p.id.slice(0,4)}`, p.role || 'player', p.x || 0, p.y || 0, p.hp != null ? p.hp : 100, p.kills || 0, p.fort || null, JSON.stringify(p.inventory || {}), Date.now()]
     );
   } catch (e) {
     console.error('upsertPlayerDB error:', e);
   }
 };
 
-const respawnPlayer = async (id) => {
+const respawnPlayer = async (playerId) => {
   try {
-    if (!players[id]) return;
-    players[id].x = rand(100, 900);
-    players[id].y = rand(100, 900);
-    players[id].hp = 100;
-    await upsertPlayerDB(players[id]);
-    io.emit('state', { players: { [id]: players[id] } });
+    const player = playersById[playerId];
+    if (!player) {
+      // try load from DB (offline respawn)
+      const dbRow = await get(`SELECT * FROM players WHERE id = ?`, [playerId]);
+      if (!dbRow) return;
+      playersById[playerId] = {
+        id: dbRow.id,
+        name: dbRow.name,
+        role: dbRow.role || 'player',
+        x: dbRow.x || rand(100, 900),
+        y: dbRow.y || rand(100, 900),
+        hp: dbRow.hp !== null ? dbRow.hp : 100,
+        kills: dbRow.kills || 0,
+        fort: dbRow.fort || null,
+        inventory: dbRow.inventory_json ? JSON.parse(dbRow.inventory_json) : {}
+      };
+    }
+    const p = playersById[playerId];
+    p.x = rand(100, 900);
+    p.y = rand(100, 900);
+    p.hp = 100;
+    await upsertPlayerDB(p);
+    // notify all clients about this player's new state
+    safeEmit('state', { players: { [playerId]: p } });
   } catch (e) {
     console.error('respawnPlayer error:', e);
   }
 };
+
+// Emit seguro (captura excepciones)
+const safeEmit = (event, payload) => {
+  try {
+    io.emit(event, payload);
+  } catch (e) {
+    console.error('safeEmit error:', e);
+  }
+};
+
+// Helper para obtener socketId de un playerId (si está online)
+const socketIdOf = (playerId) => playerSocketMap[playerId] || null;
 
 // =====================
 // SOCKET.IO HANDLERS
@@ -217,36 +256,45 @@ const respawnPlayer = async (id) => {
 io.on('connection', (socket) => {
   log('Connection:', socket.id);
 
-  // Enviar estado inicial
-  socket.emit('init', { map: mapState, players });
+  // enviar estado inicial mínimo para no mandar objetos grandes innecesarios
+  socket.emit('init', { map: mapState, players: playersById });
 
   // JOIN: crear o cargar jugador
-  socket.on('join', async (data) => {
+  // data: { player_id?, name?, role?, x?, y? }
+  socket.on('join', async (data = {}) => {
     try {
-      const name = (data && data.name) ? String(data.name).slice(0, 30) : `Player-${socket.id.slice(0,4)}`;
-      const role = (data && ['player', 'mod', 'admin'].includes(data.role)) ? data.role : 'player';
+      // si el cliente envía player_id, intentamos reconectar ese player
+      const requestedId = data.player_id ? String(data.player_id) : null;
+      const name = data.name ? String(data.name).slice(0, 30) : null;
+      const role = (data.role && ['player', 'mod', 'admin'].includes(data.role)) ? data.role : 'player';
 
-      // intentar cargar desde DB por id (si existiera con la misma socket id en DB por casualidad)
-      const existing = await get(`SELECT * FROM players WHERE id = ?`, [socket.id]);
-      if (existing) {
-        players[socket.id] = {
-          id: existing.id,
-          name: existing.name,
-          role: existing.role || 'player',
-          x: existing.x || rand(100, 900),
-          y: existing.y || rand(100, 900),
-          hp: existing.hp !== null ? existing.hp : 100,
-          kills: existing.kills || 0,
-          fort: existing.fort || null,
-          inventory: existing.inventory_json ? JSON.parse(existing.inventory_json) : {}
-        };
-      } else {
-        players[socket.id] = {
-          id: socket.id,
-          name,
+      let player;
+      if (requestedId) {
+        const existing = await get(`SELECT * FROM players WHERE id = ?`, [requestedId]);
+        if (existing) {
+          player = {
+            id: existing.id,
+            name: name || existing.name || `Player-${existing.id.slice(0,4)}`,
+            role: existing.role || role,
+            x: existing.x || rand(100, 900),
+            y: existing.y || rand(100, 900),
+            hp: existing.hp !== null ? existing.hp : 100,
+            kills: existing.kills || 0,
+            fort: existing.fort || null,
+            inventory: existing.inventory_json ? JSON.parse(existing.inventory_json) : {}
+          };
+        }
+      }
+
+      if (!player) {
+        // crear uno nuevo
+        const newId = requestedId || uuidv4();
+        player = {
+          id: newId,
+          name: name || `Player-${newId.slice(0,4)}`,
           role,
-          x: (data && data.x) || rand(100, 900),
-          y: (data && data.y) || rand(100, 900),
+          x: (data && Number(data.x)) || rand(100, 900),
+          y: (data && Number(data.y)) || rand(100, 900),
           hp: 100,
           kills: 0,
           fort: null,
@@ -254,38 +302,59 @@ io.on('connection', (socket) => {
         };
       }
 
-      await upsertPlayerDB(players[socket.id]);
-      socket.emit('init', { map: mapState, players });
-      io.emit('state', { players: { [socket.id]: players[socket.id] } });
+      // guardar en memoria y mapear socket
+      playersById[player.id] = player;
+      playerSocketMap[player.id] = socket.id;
+      socketPlayerMap[socket.id] = player.id;
 
-      log(`Player joined: ${players[socket.id].name} (${socket.id})`);
+      await upsertPlayerDB(player);
+
+      // enviar init solo al socket que se conecta (ya lo hicimos arriba, pero actualizamos con player)
+      socket.emit('init', { map: mapState, players: playersById, you: player.id });
+
+      // notificar al resto
+      socket.broadcast.emit('state', { players: { [player.id]: player } });
+
+      log(`Player joined: ${player.name} (${player.id}) via socket ${socket.id}`);
     } catch (e) {
       console.error('join error:', e);
     }
   });
 
   // Movimiento / update parcial
-  socket.on('update', async (data) => {
+  socket.on('update', async (data = {}) => {
     try {
-      if (!players[socket.id]) return;
-      // Permitir solo campos esperados
-      const allowed = ['x', 'y', 'hp', 'kills', 'fort'];
-      for (const k in data) if (!allowed.includes(k)) delete data[k];
+      const playerId = socketPlayerMap[socket.id];
+      if (!playerId) return;
+      const player = playersById[playerId];
+      if (!player) return;
 
-      players[socket.id] = { ...players[socket.id], ...data };
-      await upsertPlayerDB(players[socket.id]);
-      socket.broadcast.emit('state', { players: { [socket.id]: players[socket.id] } });
+      // Permitir solo campos esperados
+      const allowed = new Set(['x', 'y', 'hp', 'kills', 'fort', 'name']);
+      for (const k of Object.keys(data)) if (!allowed.has(k)) delete data[k];
+
+      // aplicar cambios con validación básica
+      if (data.x != null) player.x = Number(data.x);
+      if (data.y != null) player.y = Number(data.y);
+      if (data.hp != null) player.hp = Math.max(0, Number(data.hp));
+      if (data.kills != null) player.kills = Number(data.kills);
+      if (data.fort != null) player.fort = data.fort;
+      if (data.name) player.name = String(data.name).slice(0, 30);
+
+      await upsertPlayerDB(player);
+      socket.broadcast.emit('state', { players: { [playerId]: player } });
     } catch (e) {
       console.error('update error:', e);
     }
   });
 
-  // CHAT simple (limitado)
+  // CHAT simple (limitado & rate-safe)
   socket.on('chat', (msg) => {
-    if (!players[socket.id]) return;
     try {
+      const playerId = socketPlayerMap[socket.id];
+      const name = playerId && playersById[playerId] ? playersById[playerId].name : `Guest-${socket.id.slice(0,4)}`;
       const text = String(msg).slice(0, 300);
-      io.emit('chat', { id: socket.id, name: players[socket.id].name, role: players[socket.id].role, msg: text });
+      safeEmit('chat', { id: playerId || socket.id, name, msg: text });
     } catch (e) {
       console.error('chat error:', e);
     }
@@ -297,7 +366,7 @@ io.on('connection', (socket) => {
       if (!safe(wheel, ['id', 'x', 'y'])) return;
       mapState.wheels.push({ id: String(wheel.id), x: Number(wheel.x), y: Number(wheel.y) });
       await persistMapState();
-      io.emit('state', { map: mapState });
+      safeEmit('state', { map: mapState });
     } catch (e) { console.error('placeWheel error:', e); }
   });
 
@@ -307,7 +376,7 @@ io.on('connection', (socket) => {
       if (!safe(data, ['id'])) return;
       mapState.loot = mapState.loot.filter(l => l.id !== data.id);
       await persistMapState();
-      io.emit('state', { map: mapState });
+      safeEmit('state', { map: mapState });
     } catch (e) { console.error('pickupLoot error:', e); }
   });
 
@@ -317,7 +386,7 @@ io.on('connection', (socket) => {
       if (!safe(data, ['id'])) return;
       mapState.animals = mapState.animals.filter(a => a.id !== data.id);
       await persistMapState();
-      io.emit('state', { map: mapState });
+      safeEmit('state', { map: mapState });
     } catch (e) { console.error('killAnimal error:', e); }
   });
 
@@ -325,39 +394,40 @@ io.on('connection', (socket) => {
   socket.on('joinFort', async (data) => {
     try {
       if (!safe(data, ['fort'])) return;
-      if (!players[socket.id]) return;
-      players[socket.id].fort = data.fort;
-      await upsertPlayerDB(players[socket.id]);
-      io.emit('state', { players: { [socket.id]: players[socket.id] } });
+      const playerId = socketPlayerMap[socket.id];
+      if (!playerId) return;
+      const player = playersById[playerId];
+      player.fort = data.fort;
+      await upsertPlayerDB(player);
+      safeEmit('state', { players: { [playerId]: player } });
     } catch (e) { console.error('joinFort error:', e); }
   });
 
   // ----------------------------
   // HIT entre jugadores (anti-hack y seguro)
-  // payload: { target: "<socketId>", dmg: <number>, type: "melee"|"arrow" }
+  // payload: { target: "<playerId>", dmg: <number>, type: "melee"|"arrow" }
   // ----------------------------
   socket.on('hit', async (data) => {
     try {
-      if (!players[socket.id]) return;
-      if (!data || !data.target) return;
+      const attackerId = socketPlayerMap[socket.id];
+      if (!attackerId || !data || !data.target) return;
       const targetId = String(data.target);
-      if (!players[targetId]) return;
-
-      const attacker = players[socket.id];
-      const target = players[targetId];
+      const attacker = playersById[attackerId];
+      const target = playersById[targetId];
+      if (!attacker || !target) return;
 
       // CALCULA DISTANCIA: anti-hack para melee
       const dx = (attacker.x || 0) - (target.x || 0);
       const dy = (attacker.y || 0) - (target.y || 0);
       const distance = Math.sqrt(dx * dx + dy * dy);
 
-      const dmg = Number(data.dmg) || (data.type === 'arrow' ? 15 : 10);
+      const dmg = Math.max(0, Number(data.dmg) || (data.type === 'arrow' ? 15 : 10));
 
       // Si es melee, exigir distancia <= 60
       if (!data.type || data.type === 'melee') {
         if (distance > 60) return;
       } else if (data.type === 'arrow') {
-        // arrows allowed at longer distance (but max 800)
+        // arrows allowed at longer distance (but max 1200)
         if (distance > 1200) return;
       }
 
@@ -369,16 +439,18 @@ io.on('connection', (socket) => {
         target.hp = 0;
         attacker.kills = (attacker.kills || 0) + 1;
         await upsertPlayerDB(attacker);
-        io.emit('killfeed', { killer: attacker.name, victim: target.name });
+        safeEmit('killfeed', { killer: attacker.name, victim: target.name });
         await respawnPlayer(targetId);
       } else {
         await upsertPlayerDB(target);
-        io.emit('state', { players: { [targetId]: target } });
+        safeEmit('state', { players: { [targetId]: target } });
       }
 
-      // Resultado del golpe al autor y al objetivo
-      io.to(socket.id).emit('hitResult', { attacker: socket.id, target: targetId, hp: target.hp });
-      io.to(targetId).emit('hitTaken', { attacker: socket.id, hp: target.hp });
+      // Resultado del golpe al autor y al objetivo (emit a sockets si están online)
+      const targetSocket = socketIdOf(targetId);
+      const attackerSocket = socketIdOf(attackerId);
+      if (attackerSocket) io.to(attackerSocket).emit('hitResult', { attacker: attackerId, target: targetId, hp: target.hp });
+      if (targetSocket) io.to(targetSocket).emit('hitTaken', { attacker: attackerId, hp: target.hp });
 
     } catch (e) {
       console.error('hit handler error:', e);
@@ -388,12 +460,22 @@ io.on('connection', (socket) => {
   // DISCONNECT
   socket.on('disconnect', async () => {
     try {
-      if (players[socket.id]) await upsertPlayerDB(players[socket.id]);
+      const playerId = socketPlayerMap[socket.id];
+      if (playerId) {
+        // persistir jugador conectado por última vez
+        const p = playersById[playerId];
+        if (p) await upsertPlayerDB(p);
+        // limpiar mapas
+        delete playerSocketMap[playerId];
+      }
+      delete socketPlayerMap[socket.id];
+
+      // notificar a clientes que este player está offline (set null to keep protocol)
+      if (playerId) safeEmit('state', { players: { [playerId]: null } });
+
     } catch (e) {
       console.error('disconnect persist error:', e);
     }
-    delete players[socket.id];
-    io.emit('state', { players: { [socket.id]: null } });
     log('Disconnect:', socket.id);
   });
 
@@ -412,6 +494,7 @@ app.post('/clans', async (req, res) => {
 
     await run(`INSERT INTO clans (id,name,owner,created_at) VALUES (?, ?, ?, ?)`, [id, name, owner, Date.now()]);
     await run(`INSERT INTO clan_members (clan_id, player_id, role) VALUES (?, ?, ?)`, [id, owner, 'owner']);
+
     res.json({ ok: true, clan: { id, name, owner } });
   } catch (e) {
     console.error('/clans error:', e);
@@ -458,7 +541,11 @@ app.get('/clans/:id', async (req, res) => {
 app.get('/missions', async (req, res) => {
   try {
     const missions = await all(`SELECT id, title, description, reward_json, active, created_at, reset_every FROM missions WHERE active = 1`);
-    const parsed = missions.map(m => ({ ...m, reward: JSON.parse(m.reward_json || '{}') }));
+    const parsed = missions.map(m => {
+      let reward = {};
+      try { reward = JSON.parse(m.reward_json || '{}'); } catch (e) { reward = {}; }
+      return ({ id: m.id, title: m.title, description: m.description, reward, active: m.active, created_at: m.created_at, reset_every: m.reset_every });
+    });
     res.json({ ok: true, missions: parsed });
   } catch (e) {
     console.error('/missions error:', e);
@@ -481,9 +568,13 @@ app.post('/missions/:id/claim', async (req, res) => {
     await run(`INSERT INTO mission_claims (mission_id, player_id, claimed_at) VALUES (?, ?, ?)`, [missionId, player_id, Date.now()]);
 
     // Emitir evento en socket si está conectado
-    const reward = JSON.parse(mission.reward_json || '{}');
-    // si player_id coincide con socket id, emitirle directamente
-    io.to(player_id).emit('missionClaimed', { missionId, reward });
+    let reward = {};
+    try { reward = JSON.parse(mission.reward_json || '{}'); } catch (e) { reward = {}; }
+
+    const targetSocket = socketIdOf(player_id);
+    if (targetSocket) {
+      io.to(targetSocket).emit('missionClaimed', { missionId, reward });
+    }
 
     res.json({ ok: true, mission: { id: missionId, reward } });
   } catch (e) {
@@ -513,7 +604,7 @@ app.get('/status', async (req, res) => {
   try {
     res.json({
       ok: true,
-      playersConnected: Object.keys(players).length,
+      playersConnected: Object.keys(playerSocketMap).length,
       mapCounts: {
         trees: mapState.trees.length,
         animals: mapState.animals.length,
@@ -541,7 +632,7 @@ app.post('/admin/spawn-loot', async (req, res) => {
     const loot = { id: id || `loot_${Date.now()}`, x: Number(x) || rand(50, 900), y: Number(y) || rand(50, 900), type: String(type || 'wood') };
     mapState.loot.push(loot);
     await persistMapState();
-    io.emit('state', { map: mapState });
+    safeEmit('state', { map: mapState });
     res.json({ ok: true, loot });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -558,7 +649,8 @@ setInterval(async () => {
     const loot = { id: `loot_${Date.now()}`, x: rand(50, 900), y: rand(50, 900), type: ['wood', 'stone', 'meat'][Math.floor(Math.random() * 3)] };
     mapState.loot.push(loot);
     await persistMapState();
-    io.emit('mapLoot', { loot });
+    // Emit only the new loot to avoid large payloads
+    safeEmit('mapLoot', { loot });
   } catch (e) {
     console.error('auto loot error:', e);
   }
@@ -568,7 +660,7 @@ setInterval(async () => {
 setInterval(() => {
   try {
     const intensity = rand(1, 5);
-    io.emit('storm', { intensity, ts: Date.now() });
+    safeEmit('storm', { intensity, ts: Date.now() });
   } catch (e) {
     console.error('storm emit error:', e);
   }
@@ -581,17 +673,35 @@ const shutdown = async () => {
   log('Shutting down, persisting players and map...');
   try {
     // persist players
-    for (const id of Object.keys(players)) {
-      await upsertPlayerDB(players[id]);
+    for (const id of Object.keys(playersById)) {
+      await upsertPlayerDB(playersById[id]);
     }
     await persistMapState();
   } catch (e) {
     console.error('shutdown persist error:', e);
   }
-  server.close(() => {
-    log('Server closed');
-    process.exit(0);
+
+  try {
+    io.close();
+  } catch (e) {
+    console.error('error closing io:', e);
+  }
+
+  server.close(async () => {
+    // cerrar DB
+    db.close(err => {
+      if (err) console.error('error closing db:', err);
+      else log('DB closed');
+      log('Server closed');
+      process.exit(0);
+    });
   });
+
+  // forzar cierre si tarda demasiado (10s)
+  setTimeout(() => {
+    console.warn('Force exit');
+    process.exit(1);
+  }, 10_000).unref();
 };
 
 process.on('SIGINT', shutdown);
