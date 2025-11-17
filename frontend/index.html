@@ -47,7 +47,7 @@
         CONFIGURACIÓN SOCKET.IO
    =============================== */
 
-const SERVER_URL = "https://warfort.onrender.com"; // URL REAL DEL BACKEND
+const SERVER_URL = "https://warfort.onrender.com"; 
 
 let socket = null;
 
@@ -76,6 +76,10 @@ let map = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[] };
 
 let keys = {};
 
+// CÁMARA Y MUNDO GRANDE
+let camera = { x: 0, y: 0, width: 900, height: 600 };
+const WORLD = { width: 2000, height: 2000 };
+
 /* ===============================
             INICIAR EL JUEGO
    =============================== */
@@ -88,7 +92,6 @@ function startGame() {
 
     document.getElementById("stats").style.display = "block";
 
-    // conectar a servidor
     socket = io(SERVER_URL, {
         transports: ["websocket", "polling"],
         reconnection: true
@@ -133,24 +136,48 @@ function updatePlayer() {
 }
 
 /* ===============================
-         DIBUJAR JUEGO
+         DIBUJAR JUEGO (MEJORADO)
    =============================== */
 
 function draw() {
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // jugador local
+    // --- ACTUALIZAR CÁMARA ---
+    camera.x = player.x - camera.width / 2;
+    camera.y = player.y - camera.height / 2;
+
+    if (camera.x < 0) camera.x = 0;
+    if (camera.y < 0) camera.y = 0;
+    if (camera.x > WORLD.width - camera.width) camera.x = WORLD.width - camera.width;
+    if (camera.y > WORLD.height - camera.height) camera.y = WORLD.height - camera.height;
+
+    // --- CUADRICULA ---
+    ctx.strokeStyle = "rgba(255,255,255,0.05)";
+    for (let i = 0; i < WORLD.width; i += 50) {
+        ctx.beginPath();
+        ctx.moveTo(i - camera.x, 0 - camera.y);
+        ctx.lineTo(i - camera.x, WORLD.height - camera.y);
+        ctx.stroke();
+    }
+    for (let i = 0; i < WORLD.height; i += 50) {
+        ctx.beginPath();
+        ctx.moveTo(0 - camera.x, i - camera.y);
+        ctx.lineTo(WORLD.width - camera.x, i - camera.y);
+        ctx.stroke();
+    }
+
+    // --- JUGADOR LOCAL ---
     ctx.fillStyle = "cyan";
     ctx.beginPath();
-    ctx.arc(player.x, player.y, 10, 0, Math.PI*2);
+    ctx.arc(player.x - camera.x, player.y - camera.y, 10, 0, Math.PI * 2);
     ctx.fill();
 
-    // otros jugadores
+    // --- OTROS JUGADORES ---
     ctx.fillStyle = "yellow";
     for (let id in otherPlayers) {
         const p = otherPlayers[id];
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 10, 0, Math.PI*2);
+        ctx.arc(p.x - camera.x, p.y - camera.y, 10, 0, Math.PI * 2);
         ctx.fill();
     }
 }
