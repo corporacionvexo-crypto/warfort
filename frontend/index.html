@@ -1,172 +1,162 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8" />
-<title>WARFORT+ (Frontend Mejorado)</title>
-<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta charset="UTF-8">
+<title>WARFORT+ Naturaleza</title>
 <style>
-  body { margin:0; background:#081018; overflow:hidden; font-family:sans-serif; color:#fff;}
-  canvas { background:#0b0f14; display:block; margin:0 auto; box-shadow: 0 12px 50px rgba(0,0,0,0.7); border-radius:10px; }
+  body { margin:0; background:#88c; overflow:hidden; font-family:sans-serif; }
+  canvas { display:block; margin:0 auto; background:linear-gradient(#77d,#4aa); }
   #ui {
-    position:fixed; top:12px; left:12px; background:rgba(0,6,10,0.65); padding:12px; border-radius:12px;
-    border:1px solid rgba(10,160,255,0.18); box-shadow:0 8px 28px rgba(0,0,0,0.5); backdrop-filter: blur(5px);
+    position:fixed; top:10px; left:10px; background:rgba(0,0,0,0.5); padding:10px; border-radius:8px;
+    color:white; font-size:14px;
   }
-  #ui input { padding:6px; border-radius:6px; border:1px solid #223; background:#07111a; color:#fff; }
-  #weapons { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); display:flex; gap:14px; }
-  .weaponSlot { width:64px; height:64px; display:flex; align-items:center; justify-content:center; border-radius:14px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06); font-size:24px; cursor:pointer; transition:all .14s; }
-  .weaponSlot.active { transform:scale(1.18); box-shadow:0 8px 28px rgba(0,255,180,0.12); border-color: rgba(0,255,180,0.2); }
-  #minimap { position:fixed; right:16px; bottom:16px; width:180px; height:180px; border-radius:50%; border:2px solid rgba(10,200,255,0.18); background: radial-gradient(circle,#012 0%, #000 90%); box-shadow:0 14px 48px rgba(0,0,0,0.6);}
-  #hud { margin-top:8px; font-size:14px; line-height:1.5; text-shadow:0 0 4px #000; }
-  #shieldIndicator { margin-top:8px; font-weight:600; color:#3cf; text-shadow:0 0 4px #03f; }
-  .small { font-size:12px; color:#9aa; text-shadow:0 0 2px #000; }
+  #weapons { position:fixed; bottom:10px; left:50%; transform:translateX(-50%); display:flex; gap:10px; }
+  .weaponSlot { width:50px; height:50px; display:flex; align-items:center; justify-content:center; border-radius:8px; background:rgba(255,255,255,0.1); border:1px solid #fff; cursor:pointer; }
+  .weaponSlot.active { background:rgba(0,255,255,0.2); transform:scale(1.1); }
 </style>
 </head>
 <body>
-
 <div id="ui">
   <div>
-    <label>Nombre:</label>
-    <input id="nameInput" placeholder="Tu nombre" />
-    <button onclick="startGame()">Entrar</button>
+    Nombre: <input id="nameInput" placeholder="Tu nombre"/><button onclick="startGame()">Entrar</button>
   </div>
   <div id="hud" style="display:none;">
-    Vida: <span id="hp">100</span> — Stamina: <span id="staminaText">100</span><br/>
-    Zoom: <span id="zoomValue">1</span>x
-    <div id="shieldIndicator" style="display:none;">🔷 Burbuja activa: <span id="shieldTimer">0</span>s</div>
-    <div class="small">Arma actual: <span id="currentWeapon">Espada</span> — Pulsa <strong>E</strong> para escudo (3s, cd 6s). Click = atacar (espada/arco).</div>
+    HP: <span id="hp">100</span> — Stamina: <span id="stamina">100</span><br/>
+    Arma: <span id="currentWeapon">Espada</span>
   </div>
 </div>
-
 <div id="weapons">
-  <div class="weaponSlot active" id="weapon1">🔪</div>
-  <div class="weaponSlot" id="weapon2">🏹</div>
-  <div class="weaponSlot" id="weapon3">🛡️</div>
+  <div class="weaponSlot active" data-id="1">🔪</div>
+  <div class="weaponSlot" data-id="2">🏹</div>
+  <div class="weaponSlot" data-id="3">🛡️</div>
 </div>
-
 <canvas id="game" width="1000" height="660"></canvas>
-<canvas id="minimap"></canvas>
-
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-const SERVER_URL = "https://warfort.onrender.com";
-let socket = null;
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-const minimap = document.getElementById('minimap');
-const mctx = minimap.getContext('2d');
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+let username='', zoom=1;
+const WORLD={width:3000,height:3000};
 
-let username = '';
-let zoom = 1;
-let time = 0;
+let player={x:500,y:330,hp:100,stamina:100,dir:1,weapon:1,shield:false};
+let keys={};
+let animals=[];
+let particles=[];
+let arrows=[];
+let cities=[
+  {x:600,y:400,name:'Ciudad 1'},
+  {x:2200,y:800,name:'Ciudad 2'},
+  {x:1500,y:2000,name:'Ciudad 3'}
+];
 
-let player = { x:500, y:330, dx:0, dy:0, speed:3, hp:100, stamina:100, dir:1, weapon:1, canHit:true, shieldActive:false, shieldCooldown:0, shieldEndTs:0 };
-let otherPlayers = {};
-let mapState = { trees:[], bushes:[], stones:[], animals:[], wheels:[], forts:[], loot:[] };
-let particles = [];
-let arrows = [];
-let keys = {};
-let camera = { lerpX:0, lerpY:0, width: canvas.width, height: canvas.height };
-const WORLD = { width:3000, height:3000 };
+const hpEl=document.getElementById('hp');
+const staminaEl=document.getElementById('stamina');
+const currentWeaponEl=document.getElementById('currentWeapon');
 
-const hpEl = document.getElementById('hp');
-const staminaEl = document.getElementById('staminaText');
-const zoomEl = document.getElementById('zoomValue');
-const shieldIndicator = document.getElementById('shieldIndicator');
-const shieldTimerEl = document.getElementById('shieldTimer');
-const currentWeaponEl = document.getElementById('currentWeapon');
-const weaponNames = {1:'Espada',2:'Arco',3:'Escudo'};
-const SWORD_DAMAGE=12, ARROW_DAMAGE=15, SWORD_RANGE=60, SWORD_ANGLE=Math.PI*0.9, SWORD_COOLDOWN=350, SHIELD_DURATION=3000, SHIELD_COOLDOWN_MS=6000, ARROW_SPEED=10;
-
-/* ====== NETWORK ====== */
-function connectSocket(){
-  socket = io(SERVER_URL, { transports:['websocket','polling'] });
-  socket.on('connect', ()=>{ socket.emit('join',{ name:username, x:player.x, y:player.y }); });
-  socket.on('init', data => { if(data.map) mapState=data.map; if(data.players) otherPlayers=data.players; if(socket && otherPlayers[socket.id]) player.hp = otherPlayers[socket.id].hp || player.hp; });
-  socket.on('state', data => { if(data.map) mapState=data.map; if(data.players) for(const id in data.players){ if(data.players[id]===null) delete otherPlayers[id]; else { if(id===socket.id) player.hp = data.players[id].hp ?? player.hp; else otherPlayers[id]=data.players[id]; } } });
-  socket.on('hitResult', data => { if(data.attacker===socket.id) spawnHitParticleAtTarget(data.target); });
-  socket.on('hitTaken', data => { if(socket && socket.id===data.target) player.hp=data.hp; });
-  socket.on('killfeed', k=>console.log('KILLFEED',k));
-  socket.on('missionClaimed', m=>console.log('MISSION CLAIMED',m));
-  socket.on('mapLoot', d=>{ if(d.loot) mapState.loot.push(d.loot); });
-  socket.on('storm', s=>spawnStormParticles(s.intensity));
-}
-
-/* ====== INPUT ====== */
-document.addEventListener('keydown', e => {
-  keys[e.key.toLowerCase()] = true;
-  if(e.key>='1' && e.key<='3'){ player.weapon=Number(e.key); updateWeaponUI(); }
-  if(e.key.toLowerCase()==='e') tryActivateShield();
-});
-document.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()]=false; });
+document.addEventListener('keydown',e=>{ keys[e.key.toLowerCase()]=true; if(e.key>='1' && e.key<='3') changeWeapon(Number(e.key)); });
+document.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
 canvas.addEventListener('mousedown', e=>{
-  if(player.weapon===1) performSwordAttack();
-  else if(player.weapon===2) shootLocalArrow(e);
+  if(player.weapon===1) swordAttack();
+  else if(player.weapon===2) shootArrow(e);
 });
-canvas.addEventListener('wheel', e=>{ zoom-=e.deltaY*0.001; zoom=Math.max(0.6,Math.min(2.2,zoom)); zoomEl.innerText=zoom.toFixed(2); });
-function updateWeaponUI(){
-  currentWeaponEl.innerText = weaponNames[player.weapon] || 'Desconocida';
-  document.querySelectorAll('.weaponSlot').forEach((el,i)=>el.classList.toggle('active',(i+1)===player.weapon));
+document.querySelectorAll('.weaponSlot').forEach(el=>el.onclick=()=>changeWeapon(Number(el.dataset.id)));
+
+function changeWeapon(n){
+  player.weapon=n;
+  currentWeaponEl.innerText=(n===1?'Espada':n===2?'Arco':'Escudo');
+  document.querySelectorAll('.weaponSlot').forEach(el=>el.classList.toggle('active',Number(el.dataset.id)===n));
 }
 
-/* ====== SHIELD ====== */
-function tryActivateShield(){
-  const now=Date.now();
-  if(player.shieldActive || (player.shieldCooldown && player.shieldCooldown>now)) return;
-  player.shieldActive=true; player.shieldEndTs=now+SHIELD_DURATION; player.shieldCooldown=now+SHIELD_COOLDOWN_MS;
-  if(socket) socket.emit('update',{ shield:true });
-  shieldIndicator.style.display='block';
-  updateShieldUI();
-  setTimeout(()=>{
-    player.shieldActive=false;
-    shieldIndicator.style.display='none';
-    if(socket) socket.emit('update',{ shield:false });
-  }, SHIELD_DURATION);
-}
-function updateShieldUI(){ if(!player.shieldActive) return; const remain=Math.max(0,Math.ceil((player.shieldEndTs-Date.now())/1000)); shieldTimerEl.innerText=remain; }
-
-/* ====== ATTACKS ====== */
-function performSwordAttack(){ if(!player.canHit) return; player.canHit=false; spawnSwordSwingParticles(); for(const id in otherPlayers){ const p=otherPlayers[id]; if(!p) continue; const dx=p.x-player.x; const dy=p.y-player.y; const dist=Math.hypot(dx,dy); if(dist>SWORD_RANGE) continue; const angToTarget=Math.atan2(dy,dx); const facingAngle=(player.dir===1)?0:Math.PI; let diff=Math.abs(((angToTarget-facingAngle+Math.PI)%(2*Math.PI))-Math.PI); if(diff<=SWORD_ANGLE/2 && socket) socket.emit('hit',{ target:id, dmg:SWORD_DAMAGE, type:'melee' }); } setTimeout(()=>player.canHit=true,SWORD_COOLDOWN); }
-function spawnSwordSwingParticles(){ for(let i=0;i<16;i++) particles.push({ x:player.x+(Math.random()-0.5)*28, y:player.y+(Math.random()-0.5)*28, vx:(Math.random()-0.5)*3, vy:(Math.random()-0.5)*3, size:2+Math.random()*4, alpha:1, life:50 }); }
-function shootLocalArrow(e){ const rect=canvas.getBoundingClientRect(); const mx=(e.clientX-rect.left)/zoom+camera.lerpX; const my=(e.clientY-rect.top)/zoom+camera.lerpY; const ang=Math.atan2(my-player.y,mx-player.x); arrows.push({ id:'a_'+Date.now()+'_'+Math.floor(Math.random()*1000), x:player.x+Math.cos(ang)*18, y:player.y+Math.sin(ang)*18, vx:Math.cos(ang)*ARROW_SPEED, vy:Math.sin(ang)*ARROW_SPEED, life:180, owner:socket?socket.id:'local' }); }
-function handleArrowCollisions(){ for(let i=arrows.length-1;i>=0;i--){ const a=arrows[i]; for(const id in otherPlayers){ if(id===a.owner) continue; const p=otherPlayers[id]; if(!p) continue; const dx=p.x-a.x; const dy=p.y-a.y; if(Math.hypot(dx,dy)<12){ if(socket) socket.emit('hit',{ target:id, dmg:ARROW_DAMAGE, type:'arrow' }); arrows.splice(i,1); spawnHitParticleAtTarget(id); break; } } } }
-function spawnHitParticleAtTarget(targetId){ const p=otherPlayers[targetId]; if(!p) return; for(let i=0;i<20;i++) particles.push({ x:p.x+(Math.random()-0.5)*16, y:p.y+(Math.random()-0.5)*16, vx:(Math.random()-0.5)*2, vy:(Math.random()-0.5)*2, size:2+Math.random()*3, alpha:1, life:45 }); }
-
-/* ====== PARTICLES & ARROWS ====== */
-function updateParticles(){ for(let i=particles.length-1;i>=0;i--){ const p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.alpha-=0.02; p.life--; if(p.alpha<=0||p.life<=0) particles.splice(i,1); } }
-function updateArrows(){ for(let i=arrows.length-1;i>=0;i--){ const a=arrows[i]; a.x+=a.vx; a.y+=a.vy; a.life--; if(a.life<=0||a.x<0||a.y<0||a.x>WORLD.width||a.y>WORLD.height){ arrows.splice(i,1); continue; } } handleArrowCollisions(); }
-function spawnStormParticles(intensity){ for(let i=0;i<intensity*10;i++) particles.push({ x:Math.random()*WORLD.width, y:Math.random()*WORLD.height, vx:(Math.random()-0.5)*0.1, vy:(Math.random()-0.2)*0.3, size:1+Math.random()*3, alpha:0.6, life:200 }); }
-
-/* ====== PLAYER UPDATE ====== */
-function updatePlayer(){
-  player.dx=0; player.dy=0; let sp=player.speed;
-  if(keys['shift'] && player.stamina>0){ sp+=2; player.stamina=Math.max(0,player.stamina-0.8); if(Math.random()<0.6) particles.push({x:player.x+(Math.random()-0.5)*10,y:player.y+14,vx:(Math.random()-0.5)*1.5,vy:1.8,size:2,alpha:0.8,life:40}); }
-  else player.stamina=Math.min(100,player.stamina+0.35);
-  if(keys['w']||keys['arrowup']) player.dy=-sp;
-  if(keys['s']||keys['arrowdown']) player.dy=sp;
-  if(keys['a']||keys['arrowleft']){ player.dx=-sp; player.dir=-1; }
-  if(keys['d']||keys['arrowright']){ player.dx=sp; player.dir=1; }
-  player.x=Math.max(0,Math.min(WORLD.width,player.x)); player.y=Math.max(0,Math.min(WORLD.height,player.y));
-  camera.lerpX+=(player.x-camera.lerpX-camera.width/2/zoom)*0.12;
-  camera.lerpY+=(player.y-camera.lerpY-camera.height/2/zoom)*0.12;
-  if(socket && socket.connected) socket.emit('update',{ x:player.x, y:player.y, hp:player.hp, shield:player.shieldActive });
-  if(player.shieldCooldown){ const now=Date.now(); if(player.shieldCooldown<=now) player.shieldCooldown=0; }
+// === GAME ===
+function startGame(){
+  username=document.getElementById('nameInput').value||'You';
+  document.getElementById('nameInput').parentElement.style.display='none';
+  document.getElementById('hud').style.display='block';
+  for(let i=0;i<15;i++){ animals.push({x:Math.random()*WORLD.width,y:Math.random()*WORLD.height,hp:50,type:Math.random()<0.5?'vaca':'lobo',dir:Math.random()*Math.PI*2}); }
+  requestAnimationFrame(loop);
 }
 
-/* ====== DRAW ====== */
+function loop(){
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function update(){
+  // movimiento
+  let sp=2+(keys['shift']?1:0);
+  if(keys['w']) player.y-=sp;
+  if(keys['s']) player.y+=sp;
+  if(keys['a']) { player.x-=sp; player.dir=-1; }
+  if(keys['d']) { player.x+=sp; player.dir=1; }
+  player.stamina=Math.min(100,player.stamina+(keys['shift']? -0.5 :0.3));
+
+  // animales
+  for(let a of animals){
+    let dx=player.x-a.x,dy=player.y-a.y;
+    let dist=Math.hypot(dx,dy);
+    if(a.type==='lobo' && dist<150){ a.dir=Math.atan2(dy,dx); a.x+=Math.cos(a.dir)*1.2; a.y+=Math.sin(a.dir)*1.2; }
+    else if(a.type==='vaca' && dist<100){ a.dir=Math.atan2(-dy,-dx); a.x+=Math.cos(a.dir)*0.6; a.y+=Math.sin(a.dir)*0.6; }
+  }
+
+  // flechas
+  for(let i=arrows.length-1;i>=0;i--){
+    let a=arrows[i];
+    a.x+=Math.cos(a.dir)*10; a.y+=Math.sin(a.dir)*10; a.life--;
+    for(let j=0;j<animals.length;j++){
+      let ani=animals[j];
+      if(Math.hypot(a.x-ani.x,a.y-ani.y)<15){ ani.hp-=20; arrows.splice(i,1); if(ani.hp<=0) animals.splice(j,1); break; }
+    }
+    if(a.life<=0) arrows.splice(i,1);
+  }
+
+  // partículas
+  for(let i=particles.length-1;i>=0;i--){ let p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.life--; if(p.life<=0) particles.splice(i,1); }
+
+  hpEl.innerText=player.hp;
+  staminaEl.innerText=Math.floor(player.stamina);
+}
+
 function draw(){
-  ctx.clearRect(0,0,canvas.width,canvas.height); time+=0.01; const night=(Math.sin(time)+1)/2;
-  ctx.save(); ctx.scale(zoom,zoom); ctx.translate(-camera.lerpX,-camera.lerpY);
-  drawGrid(); drawMapObjects(); drawOtherPlayers(); drawArrows(); drawLocalPlayer(); drawParticles(); drawDarkness(night);
-  ctx.restore(); drawMinimap();
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.save(); ctx.scale(zoom,zoom); ctx.translate(-player.x+canvas.width/2,-player.y+canvas.height/2);
+
+  // terreno
+  ctx.fillStyle='#6c9'; ctx.fillRect(0,0,WORLD.width,WORLD.height);
+  ctx.fillStyle='#4af'; for(let i=0;i<WORLD.width;i+=100){ ctx.fillRect(i,500,100,50); } // río simple
+
+  // ciudades
+  for(let c of cities){ ctx.fillStyle='#a52'; ctx.fillRect(c.x-30,c.y-30,60,60); ctx.fillStyle='white'; ctx.fillText(c.name,c.x-20,c.y-35); }
+
+  // animales
+  for(let a of animals){
+    ctx.fillStyle=(a.type==='lobo'?'#888':'#fff'); ctx.beginPath(); ctx.arc(a.x,a.y,12,0,Math.PI*2); ctx.fill();
+  }
+
+  // jugador
+  ctx.fillStyle='blue'; ctx.beginPath(); ctx.arc(player.x,player.y,15,0,Math.PI*2); ctx.fill();
+
+  // flechas
+  ctx.fillStyle='orange'; for(let a of arrows){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(a.dir); ctx.fillRect(-6,-2,12,4); ctx.restore(); }
+
+  // partículas
+  for(let p of particles){ ctx.fillStyle=`rgba(255,255,255,${p.alpha})`; ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,Math.PI*2); ctx.fill(); }
+
+  ctx.restore();
 }
-function drawGrid(){ ctx.strokeStyle="rgba(255,255,255,0.015)"; for(let i=0;i<WORLD.width;i+=50){ ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,WORLD.height); ctx.stroke(); } for(let j=0;j<WORLD.height;j+=50){ ctx.beginPath(); ctx.moveTo(0,j); ctx.lineTo(WORLD.width,j); ctx.stroke(); } }
-function drawMapObjects(){ if(mapState.loot){ ctx.fillStyle='#c2a45a'; for(const l of mapState.loot){ ctx.beginPath(); ctx.rect(l.x-6,l.y-6,12,12); ctx.fill(); } } }
-function drawOtherPlayers(){ for(const id in otherPlayers){ const p=otherPlayers[id]; if(!p) continue; ctx.fillStyle='#ffcf66'; ctx.beginPath(); ctx.arc(p.x,p.y,10,0,Math.PI*2); ctx.fill(); ctx.fillStyle='#fff'; ctx.font='12px Arial'; ctx.fillText(p.name??'Player',p.x-18,p.y-16); ctx.fillStyle='#333'; ctx.fillRect(p.x-16,p.y-26,32,5); ctx.fillStyle='#0f0'; ctx.fillRect(p.x-16,p.y-26,Math.max(0,(p.hp||100)*0.32),5); } }
-function drawArrows(){ ctx.fillStyle='orange'; for(const a of arrows){ ctx.save(); ctx.translate(a.x,a.y); ctx.rotate(Math.atan2(a.vy,a.vx)); ctx.fillRect(-6,-1.5,12,3); ctx.restore(); } }
-function drawLocalPlayer(){
-  ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(player.x,player.y+16,18,8,0,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#4fe8d4'; ctx.beginPath(); ctx.arc(player.x,player.y,12,0,Math.PI*2); ctx.fill();
-  ctx.strokeStyle='#fff'; ctx.beginPath(); ctx.moveTo(player.x,player.y); ctx.lineTo(player.x+player.dir*20,player.y); ctx.stroke();
-  ctx.fillStyle='#fff'; ctx.font='14px Arial'; ctx.fillText(username||'You',player.x-22,player.y-18);
-  ctx.fillStyle='#333'; ctx.fillRect(player.x-18,player.y-28,36,6); ctx.fillStyle='#f33'; ctx.fillRect(player.x-18,player.y-28,Math.max(0,player.hp*0.36),6);
-  if(player.shieldActive){ ctx.fillStyle='rgba(90,160,255,0.28)'; ctx.beginPath(); ctx.arc(player.x,player.y,44,0,Math.PI*2); ctx.fill(); ctx.strokeStyle='rgba(150,200,255,0.5)'; ctx.lineWidth=2
+
+// ataques
+function swordAttack(){
+  for(let a of animals){
+    if(Math.hypot(player.x-a.x,player.y-a.y)<40){ a.hp-=20; particles.push({x:a.x,y:a.y,vx:(Math.random()-0.5)*2,vy:(Math.random()-0.5)*2,size:3,alpha:1,life:20}); if(a.hp<=0) animals.splice(animals.indexOf(a),1); }
+  }
+}
+
+function shootArrow(e){
+  const rect=canvas.getBoundingClientRect();
+  const mx=(e.clientX-rect.left)/zoom + player.x - canvas.width/2/zoom;
+  const my=(e.clientY-rect.top)/zoom + player.y - canvas.height/2/zoom;
+  arrows.push({x:player.x,y:player.y,dir:Math.atan2(my-player.y,mx-player.x),life:100});
+}
+</script>
+</body>
+</html>
